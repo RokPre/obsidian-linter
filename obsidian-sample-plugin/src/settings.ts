@@ -70,16 +70,20 @@ export class SampleSettingTab extends PluginSettingTab {
 			else addButton.setCta();
 		};
 
-		let saveButton: ButtonComponent;
-		const updateSaveButton = () => {
+		const canSave = () => {
 			const draft = this.draftIgnoredPaths.filter((path) => path.trim() !== '');
 			const saved = this.plugin.settings.ignoredPaths;
 			const hasChanges = draft.length !== saved.length ||
 				draft.some((path, index) => path !== saved[index]);
 
-			const isValid = this.isDraftValid();
-			saveButton.setDisabled(!isValid);
-			if (isValid && hasChanges) saveButton.setCta();
+			return this.isDraftValid() && hasChanges;
+		};
+
+		let saveButton: ButtonComponent;
+		const updateSaveButton = () => {
+			const enabled = canSave();
+			saveButton.setDisabled(!enabled);
+			if (enabled) saveButton.setCta();
 			else saveButton.removeCta();
 		};
 
@@ -169,7 +173,7 @@ export class SampleSettingTab extends PluginSettingTab {
 				button
 					.setButtonText('Save')
 					.onClick(async () => {
-						if (!this.isDraftValid()) return;
+						if (!canSave()) return;
 
 						const ignoredPaths = this.draftIgnoredPaths
 							.filter((path) => path.trim() !== '');

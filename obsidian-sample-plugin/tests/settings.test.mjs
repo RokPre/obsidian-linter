@@ -16,6 +16,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	const buttons = [];
 	const notices = [];
 	const errors = [];
+	const saveRequests = [];
 	class FileSystemAdapter {
 		constructor(basePath) { this.basePath = basePath; }
 		getBasePath() { return this.basePath; }
@@ -127,7 +128,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	const indexRequests = [];
 	const plugin = {
 		settings: { ignoredPaths: [...ignoredPaths] },
-		async saveSettings() {},
+		async saveSettings(settings) { saveRequests.push([...settings.ignoredPaths]); },
 		indexerClient: {
 			indexVault(vaultPath, paths) {
 				indexRequests.push([...paths]);
@@ -139,7 +140,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	const tab = new module.exports.SampleSettingTab({ vault }, plugin);
 	tab.display();
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests,
+		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests,
 		button: settings.find(setting => setting.name === 'Indexing').button,
 		get pickers() {
 			return settings.filter(setting =>
@@ -148,12 +149,205 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	};
 }
 
+test('unchanged and empty drafts disable Save and direct invocation has no side effects', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-save-unchanged-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		for (const ignoredPaths of [['a.md'], []]) {
+			const ui = await settingsTab(vault, ignoredPaths);
+			const save = ui.buttons.find(button => button.label === 'Save');
+
+			assert.equal(save.disabled, true);
+			assert.equal(save.cta, false);
+			await save.click();
+			assert.deepEqual(ui.saveRequests, []);
+			assert.deepEqual(ui.indexRequests, []);
+			assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ignoredPaths);
+		}
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('valid edits enable Save, and reverting the ordered draft disables it again', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-save-eligibility-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		await writeFile(join(vault, 'b.md'), '# B\n');
+
+		const changed = await settingsTab(vault, ['a.md']);
+		const changedSave = changed.buttons.find(button => button.label === 'Save');
+		const changedInput = changed.pickers[0].text;
+		changedInput.inputEl.value = 'b.md';
+		changedInput.change('b.md');
+		assert.equal(changedSave.disabled, false);
+		assert.equal(changedSave.cta, true);
+		changedInput.inputEl.value = 'a.md';
+		changedInput.change('a.md');
+		assert.equal(changedSave.disabled, true);
+		assert.equal(changedSave.cta, false);
+
+		const reordered = await settingsTab(vault, ['a.md', 'b.md']);
+		const reorderedSave = reordered.buttons.find(button => button.label === 'Save');
+		const secondInput = reordered.pickers[1].text;
+		secondInput.inputEl.value = 'a.md';
+		secondInput.change('a.md');
+		const firstInput = reordered.pickers[0].text;
+		firstInput.inputEl.value = 'b.md';
+		firstInput.change('b.md');
+		assert.equal(reorderedSave.disabled, false);
+		assert.equal(reorderedSave.cta, true);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('invalid changed drafts disable Save and direct invocation has no side effects', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-save-invalid-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		await writeFile(join(vault, 'b.md'), '# B\n');
+		for (const { ignoredPaths, index, value } of [
+			{ ignoredPaths: ['a.md'], index: 0, value: '/' },
+			{ ignoredPaths: ['a.md'], index: 0, value: 'missing.md' },
+			{ ignoredPaths: ['a.md', 'b.md'], index: 1, value: 'a.md' },
+		]) {
+			const ui = await settingsTab(vault, ignoredPaths);
+			const input = ui.pickers[index].text;
+			input.inputEl.value = value;
+			input.change(value);
+			const save = ui.buttons.find(button => button.label === 'Save');
+
+			assert.equal(save.disabled, true);
+			assert.equal(save.cta, false);
+			await save.click();
+			assert.deepEqual(ui.saveRequests, []);
+			assert.deepEqual(ui.indexRequests, []);
+			assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ignoredPaths);
+		}
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('adding an extra blank picker does not make an unchanged draft eligible', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-save-blank-picker-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		const ui = await settingsTab(vault, ['a.md']);
+		ui.buttons.find(button => button.label === 'Add').click();
+		const save = ui.buttons.find(button => button.label === 'Save');
+
+		assert.equal(ui.pickers.length, 2);
+		assert.equal(ui.pickers[1].text.inputEl.value, '');
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+test('blanking a saved path saves only the remaining paths, including an empty list', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-blank-saved-path-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		await writeFile(join(vault, 'b.md'), '# B\n');
+		const ui = await settingsTab(vault, ['a.md', 'b.md']);
+		const save = ui.buttons.find(button => button.label === 'Save');
+		const input = ui.pickers[0].text;
+		input.inputEl.value = ' \t ';
+		input.change(' \t ');
+
+		assert.equal(save.disabled, false);
+		assert.equal(save.cta, true);
+		await save.click();
+		assert.deepEqual(ui.saveRequests, [['b.md']]);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['b.md']);
+		assert.deepEqual(ui.indexRequests, [['b.md']]);
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+
+		const last = ui.pickers[1].text;
+		last.inputEl.value = '';
+		last.change('');
+		assert.equal(save.disabled, false);
+		assert.equal(save.cta, true);
+		await save.click();
+		assert.deepEqual(ui.saveRequests, [['b.md'], []]);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
+		assert.deepEqual(ui.indexRequests, [['b.md'], []]);
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('clearing saved exclusions and saving persists an empty list', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-clear-saved-paths-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		const ui = await settingsTab(vault, ['a.md']);
+		const save = ui.buttons.find(button => button.label === 'Save');
+		ui.buttons.find(button => button.label === 'Clear').click();
+
+		assert.equal(save.disabled, false);
+		assert.equal(save.cta, true);
+		await save.click();
+		assert.deepEqual(ui.saveRequests, [[]]);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
+		assert.deepEqual(ui.indexRequests, [[]]);
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('successful persistence disables Save before indexing settles', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-save-before-index-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		await writeFile(join(vault, 'b.md'), '# B\n');
+		const ui = await settingsTab(vault, ['a.md']);
+		const input = ui.pickers[0].text;
+		input.inputEl.value = 'b.md';
+		input.change('b.md');
+		const save = ui.buttons.find(button => button.label === 'Save');
+		let indexStarted;
+		const started = new Promise(resolve => { indexStarted = resolve; });
+		let finishIndex;
+		ui.plugin.indexerClient.indexVault = (_vaultPath, paths) => {
+			ui.indexRequests.push([...paths]);
+			indexStarted();
+			return new Promise(resolve => { finishIndex = resolve; });
+		};
+
+		const saving = save.click();
+		await started;
+		await Promise.resolve();
+		assert.deepEqual(ui.saveRequests, [['b.md']]);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['b.md']);
+		assert.deepEqual(ui.indexRequests, [['b.md']]);
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+		finishIndex({ addedFiles: 0, indexedFiles: 0, deletedFiles: 0 });
+		await saving;
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+
 test('settings button indexes the active vault and is re-enabled after success', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-settings-'));
 	try {
 		await mkdir(join(vault, '.obsidian'));
 		await writeFile(join(vault, 'note.md'), '# Note\n#project/tag\n');
-		const { button, notices, errors } = await settingsTab(vault);
+		const { button, notices, errors, plugin, buttons } = await settingsTab(vault);
+		const save = buttons.find(candidate => candidate.label === 'Save');
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+		assert.deepEqual(Array.from(plugin.settings.ignoredPaths), []);
 		assert.equal(button.label, 'Index vault');
 		assert.deepEqual(notices, []);
 		const indexing = button.click();
@@ -165,6 +359,9 @@ test('settings button indexes the active vault and is re-enabled after success',
 		assert.deepEqual(errors, []);
 		const database = await readFile(join(vault, '.obsidian', 'vaultHelper.db'));
 		assert.equal(database.subarray(0, 16).toString(), 'SQLite format 3\0');
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
+		assert.deepEqual(Array.from(plugin.settings.ignoredPaths), []);
 		await button.click();
 		assert.equal(notices.at(-1), 'Index updated: 0 added, 0 updated, 0 removed.');
 	} finally { await rm(vault, { recursive: true, force: true }); }
@@ -294,18 +491,31 @@ test('failed Save keeps the last saved ignore paths active', async () => {
 		await writeFile(join(vault, 'a.md'), '# A\n');
 		await writeFile(join(vault, 'b.md'), '# B\n');
 		const ui = await settingsTab(vault, ['a.md']);
-		ui.plugin.saveSettings = async () => { throw new Error('settings write failed'); };
+		ui.plugin.saveSettings = async settings => {
+			ui.saveRequests.push([...settings.ignoredPaths]);
+			throw new Error('settings write failed');
+		};
 		const input = ui.pickers[0].text;
 		input.inputEl.value = 'b.md';
 		input.change('b.md');
 		const save = ui.buttons.find(button => button.label === 'Save');
 
 		await save.click();
+		assert.deepEqual(ui.saveRequests, [['b.md']]);
 		assert.deepEqual(ui.notices, ['Settings could not be saved: Error: settings write failed']);
 		assert.equal(ui.errors.length, 1);
-		assert.deepEqual(ui.plugin.settings.ignoredPaths, ['a.md']);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['a.md']);
 		assert.deepEqual(ui.indexRequests, []);
+		assert.equal(save.disabled, false);
 		assert.equal(save.cta, true);
+
+		ui.plugin.saveSettings = async settings => { ui.saveRequests.push([...settings.ignoredPaths]); };
+		await save.click();
+		assert.deepEqual(ui.saveRequests, [['b.md'], ['b.md']]);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['b.md']);
+		assert.deepEqual(ui.indexRequests, [['b.md']]);
+		assert.equal(save.disabled, true);
+		assert.equal(save.cta, false);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}
@@ -332,6 +542,7 @@ test('Save keeps new ignore paths active and reports a subsequent indexing failu
 		assert.equal(ui.notices.length, 1);
 		assert.match(ui.notices[0], /^Settings saved, but indexing failed:/);
 		assert.equal(ui.errors.length, 1);
+		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
