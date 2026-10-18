@@ -1,0 +1,31 @@
+name: Node.js build
+
+on:
+    push:
+        branches: ['**']
+    pull_request:
+        branches: ['**']
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: obsidian-sample-plugin
+
+        strategy:
+            matrix:
+                node-version: [20.x, 22.x, 24.x]
+                # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+        steps:
+            - uses: actions/checkout@v6
+            - name: Use Node.js ${{ matrix.node-version }}
+              uses: actions/setup-node@v6
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: 'npm'
+                  cache-dependency-path: obsidian-sample-plugin/package-lock.json
+            - run: npm ci
+            - run: npm run build
+            - run: npm run lint

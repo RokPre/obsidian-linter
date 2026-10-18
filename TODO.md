@@ -1,0 +1,44 @@
+# TODOs
+
+- [ ] TODO: Detect moves where inode is the same but file is deleted and created.
+- [ ] TODO: Inspect Obsidian plugin link resolution for targets excluded by the ignored list: determine whether existing-but-ignored files become future/missing links, and define how changing the list should update those links.
+- [ ] TODO: Unify yaml delimiters.
+- [ ] TODO: Modified files have their nodes and source links deleted and reinserted (/home/rok/sync/vaultHelper/obsidian-sample-plugin/src/indexer.ts:894). Database node IDs therefore should not become durable identifiers in saved rules, diagnostics, or future edit plans. Use source-oriented locators and freshness information. A simple path/range plus source revision or fingerprint is a more appropriate starting point than inventing permanent identities for every Markdown node.
+- [ ] TODO: Test the sql.js file for memory usage, performance, ui stuttering and other possible issues.
+- [ ] TODO: Enable Save only when the ignore-list draft is valid and has unsaved changes; disable it when unchanged, invalid, or successfully saved. Ignore blank pickers when comparing with saved settings.
+- [ ] TODO: Disable Clear when only one blank picker is present; enable it when there are paths or extra rows to clear.
+- [ ] TODO: Run indexing independently of Save completion: persist settings and apply exclusions first, then request indexing without holding Save open; verify the settings remain responsive during long scans.
+- [ ] TODO: Add automated worker integration tests for startup, vault events, Save, and Index vault: use the built worker and a temporary vault; verify saved exclusions, result/error replies, one shared worker, responsive parent thread, and shutdown on unload.
+- [ ] TODO: Add settings button interaction tests.
+  - [ ] Extend the fake environment to expose each button separately, track picker rows when cleared, and record settings saves.
+  - [ ] Test Add: append one blank picker without losing existing values; disable while any picker is blank; use the theme primary color when enabled.
+  - [ ] Test Clear: replace all paths with one blank picker and a blank draft entry; keep Add and that picker's × disabled until it is filled; leave saved settings and active exclusions unchanged until Save.
+  - [ ] Test Save styling: highlight valid unsaved changes; return to normal for invalid or unchanged drafts and after successful saving; ignore blank pickers when comparing changes.
+  - [ ] Test Save validation: reject root, missing paths, and duplicates through both the disabled button and a direct handler call, without saving or indexing.
+  - [ ] Test successful Save: persist nonblank draft paths, update active exclusions, and request indexing once; Clear followed by Save must persist an empty list.
+  - [ ] Test failed persistence: do not update active exclusions or request indexing when saving settings fails.
+
+- [ ] TODO: Add a diagnostics sidebar for linter findings.
+  - [ ] Define the view input: rule ID, check, severity, vault-relative file path, message, and optional one-based line.
+  - [ ] Register a dedicated Obsidian diagnostics view type.
+  - [ ] Add a command to open the diagnostics view in the right sidebar.
+  - [ ] Add a command to open the diagnostics view in the left sidebar.
+  - [ ] Reuse an existing diagnostics view when either command is run again.
+  - [ ] Add a vertically scrollable results container.
+  - [ ] Render each finding with its rule ID, severity, file path, and message.
+  - [ ] Display the line number when a finding provides one.
+  - [ ] Show an empty-results message when there are no findings.
+  - [ ] Replace the previous findings when a new health-check result arrives.
+  - [ ] Make finding entries keyboard-accessible buttons.
+  - [ ] Resolve the clicked finding's vault-relative path to an Obsidian file.
+  - [ ] Open that file in an editor without replacing the diagnostics sidebar.
+  - [ ] Convert a supplied one-based line to the editor's zero-based line.
+  - [ ] Place the editor cursor on that line and scroll it into view.
+  - [ ] Open findings without a line normally, without forcing a cursor position.
+  - [ ] Show a notice instead of throwing if the file no longer exists.
+  - [ ] Clear view-owned listeners and references when the view closes.
+  - [ ] Verify both sidebar commands open or reuse the diagnostics view.
+  - [ ] Verify a long findings list scrolls inside the sidebar.
+  - [ ] Verify clicking a finding with a line opens the correct file and line.
+  - [ ] Verify clicking a finding without a line opens the correct file.
+  - [ ] Verify clicking a finding for a deleted file shows the notice.

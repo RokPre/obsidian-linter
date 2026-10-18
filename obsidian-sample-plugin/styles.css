@@ -1,0 +1,28 @@
+/*
+
+This CSS file will be included with your plugin, and
+available in the app when your plugin is enabled.
+
+If your plugin does not need CSS, delete this file.
+
+*/
+
+.vault-helper-ignore-list {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 8px;
+	margin-bottom: 16px;
+}
+
+.vault-helper-ignore-list > .setting-item {
+	background: transparent;
+	padding: var(--size-4-2);
+}
+
+.vault-helper-ignore-list > .vault-helper-ignore-actions {
+	margin-bottom: 0;
+}
+
+.vault-helper-ignore-list .extra-setting-button.is-disabled {
+	pointer-events: none;
+}

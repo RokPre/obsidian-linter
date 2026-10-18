@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "require-aliases",
+      "check": "requiredFrontmatterProperty",
+      "enabled": true,
+      "severity": "warning",
+      "scope": {
+        "fileKinds": ["markdown"],
+        "include": ["**"],
+        "exclude": []
+      },
+      "options": {
+        "property": "aliases"
+      }
+    }
+  ]
+}

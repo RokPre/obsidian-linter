@@ -1,0 +1,286 @@
+{
+  "corpus": "/home/rok/offline/tmp/nixpkgs-vault",
+  "selection": "Evenly spaced sorted Markdown paths; same temporary sample for both versions",
+  "python_version": "3.14.7 (main, Aug 10 2026, 07:46:56) [GCC 16.1.1 20260728]",
+  "node_version": "v26.8.1",
+  "original_prototype_commit": "7e245e2",
+  "simplification_check": {
+    "baseline_commit": "75b2244",
+    "files": 2000,
+    "runs": 3,
+    "baseline_wall_seconds": [10.327, 10.611, 10.305],
+    "candidate_wall_seconds": [7.141, 7.267, 7.475],
+    "all_database_rows_equal_on_each_run": true,
+    "foreign_keys_valid": true,
+    "focused_tests_passed": 25
+  },
+  "small_sample": {
+    "baseline_commit": "75b2244",
+    "files": 2000,
+    "baseline": [
+      {
+        "wall_seconds": 10.503118674998404,
+        "database_bytes": 59318272,
+        "stages": {
+          "parse_markdown_tree": 6.087848,
+          "insert_markdown_nodes": 2.986515,
+          "parse_frontmatter": 0.43653800000000004,
+          "insert_vault_links": 0.20564,
+          "resolve_vault_links": 0.048415,
+          "read_bytes": 0.032782,
+          "insert_frontmatter_nodes": 0.032335,
+          "get_frontmatter": 0.026269999999999998,
+          "insert_note_tags": 0.016488,
+          "insert_vault_tags-insert": 0.002523,
+          "find_changes": 0.00044,
+          "insert_vault_tags-delete": 7.099999999999999e-05
+        }
+      },
+      {
+        "wall_seconds": 10.374426442000185,
+        "database_bytes": 59318272,
+        "stages": {
+          "parse_markdown_tree": 5.987724,
+          "insert_markdown_nodes": 2.960279,
+          "parse_frontmatter": 0.451536,
+          "insert_vault_links": 0.205177,
+          "resolve_vault_links": 0.047463,
+          "read_bytes": 0.033006,
+          "insert_frontmatter_nodes": 0.032038,
+          "get_frontmatter": 0.02562,
+          "insert_note_tags": 0.016345,
+          "insert_vault_tags-insert": 0.002519,
+          "find_changes": 0.00047099999999999996,
+          "insert_vault_tags-delete": 7.4e-05
+        }
+      },
+      {
+        "wall_seconds": 10.447880947000158,
+        "database_bytes": 59318272,
+        "stages": {
+          "parse_markdown_tree": 6.051019,
+          "insert_markdown_nodes": 2.9732350000000003,
+          "parse_frontmatter": 0.44423,
+          "insert_vault_links": 0.204467,
+          "resolve_vault_links": 0.0476,
+          "read_bytes": 0.033366999999999994,
+          "insert_frontmatter_nodes": 0.032249,
+          "get_frontmatter": 0.025596,
+          "insert_note_tags": 0.016363,
+          "insert_vault_tags-insert": 0.0025299999999999997,
+          "find_changes": 0.00044500000000000003,
+          "insert_vault_tags-delete": 7.099999999999999e-05
+        }
+      }
+    ],
+    "candidate": [
+      {
+        "wall_seconds": 7.927798762000748,
+        "database_bytes": 46063616,
+        "stages": {
+          "parse_markdown_tree": 6.354532,
+          "insert_markdown_nodes": 2.3660430000000003,
+          "parse_frontmatter": 0.468999,
+          "insert_vault_links": 0.225673,
+          "insert_frontmatter_nodes": 0.097773,
+          "read_bytes": 0.059594,
+          "resolve_vault_links": 0.047447,
+          "get_frontmatter": 0.029085,
+          "insert_note_tags": 0.018018999999999997,
+          "insert_vault_tags-insert": 0.002958,
+          "find_changes": 0.000437,
+          "insert_vault_tags-delete": 7.199999999999999e-05
+        }
+      },
+      {
+        "wall_seconds": 7.500413621999542,
+        "database_bytes": 46063616,
+        "stages": {
+          "parse_markdown_tree": 5.983523,
+          "insert_markdown_nodes": 2.2819000000000003,
+          "parse_frontmatter": 0.442144,
+          "insert_vault_links": 0.22495199999999999,
+          "insert_frontmatter_nodes": 0.09505,
+          "read_bytes": 0.056433,
+          "resolve_vault_links": 0.047965,
+          "get_frontmatter": 0.027603000000000003,
+          "insert_note_tags": 0.018088,
+          "insert_vault_tags-insert": 0.0029300000000000003,
+          "find_changes": 0.000449,
+          "insert_vault_tags-delete": 7.099999999999999e-05
+        }
+      },
+      {
+        "wall_seconds": 7.555405916000382,
+        "database_bytes": 46063616,
+        "stages": {
+          "parse_markdown_tree": 6.050827,
+          "insert_markdown_nodes": 2.2846819999999997,
+          "parse_frontmatter": 0.451761,
+          "insert_vault_links": 0.228019,
+          "insert_frontmatter_nodes": 0.08276399999999999,
+          "read_bytes": 0.055363,
+          "resolve_vault_links": 0.047424,
+          "get_frontmatter": 0.028337,
+          "insert_note_tags": 0.018132000000000002,
+          "insert_vault_tags-insert": 0.0029649999999999998,
+          "find_changes": 0.00046800000000000005,
+          "insert_vault_tags-delete": 7.099999999999999e-05
+        }
+      }
+    ],
+    "rows": {
+      "vault_directories": 1,
+      "vault_notes": 2000,
+      "frontmatter_nodes": 8847,
+      "frontmatter_errors": 0,
+      "markdown_nodes": 493193,
+      "vault_tags": 531,
+      "note_tag_occurrences": 6848,
+      "vault_links": 28471,
+      "vault_index_state": 1
+    }
+  },
+  "large_sample": {
+    "baseline_commit": "75b2244",
+    "files": 10000,
+    "baseline": [
+      {
+        "wall_seconds": 50.69188095099889,
+        "database_bytes": 297451520,
+        "stages": {
+          "parse_markdown_tree": 28.869937,
+          "insert_markdown_nodes": 15.023242,
+          "parse_frontmatter": 2.1690970000000003,
+          "insert_vault_links": 1.025185,
+          "resolve_vault_links": 0.250666,
+          "insert_frontmatter_nodes": 0.166066,
+          "read_bytes": 0.15967599999999998,
+          "get_frontmatter": 0.12902699999999998,
+          "insert_note_tags": 0.08581,
+          "insert_vault_tags-insert": 0.007745,
+          "find_changes": 0.0022559999999999998,
+          "insert_vault_tags-delete": 0.000204
+        }
+      },
+      {
+        "wall_seconds": 52.10768555600043,
+        "database_bytes": 297451520,
+        "stages": {
+          "parse_markdown_tree": 29.933686,
+          "insert_markdown_nodes": 15.173620999999999,
+          "parse_frontmatter": 2.278944,
+          "insert_vault_links": 1.048273,
+          "resolve_vault_links": 0.253503,
+          "insert_frontmatter_nodes": 0.167996,
+          "read_bytes": 0.165886,
+          "get_frontmatter": 0.131649,
+          "insert_note_tags": 0.08609900000000001,
+          "insert_vault_tags-insert": 0.0076159999999999995,
+          "find_changes": 0.002242,
+          "insert_vault_tags-delete": 0.000208
+        }
+      },
+      {
+        "wall_seconds": 50.46147097300127,
+        "database_bytes": 297451520,
+        "stages": {
+          "parse_markdown_tree": 28.813931,
+          "insert_markdown_nodes": 14.759086,
+          "parse_frontmatter": 2.219408,
+          "insert_vault_links": 1.022727,
+          "resolve_vault_links": 0.248865,
+          "insert_frontmatter_nodes": 0.163163,
+          "read_bytes": 0.162689,
+          "get_frontmatter": 0.12768300000000002,
+          "insert_note_tags": 0.086229,
+          "insert_vault_tags-insert": 0.007522999999999999,
+          "find_changes": 0.002283,
+          "insert_vault_tags-delete": 0.000212
+        }
+      }
+    ],
+    "candidate": [
+      {
+        "wall_seconds": 36.16979626700049,
+        "database_bytes": 230940672,
+        "stages": {
+          "parse_markdown_tree": 29.182923,
+          "insert_markdown_nodes": 11.062383,
+          "parse_frontmatter": 2.169691,
+          "insert_vault_links": 1.10443,
+          "insert_frontmatter_nodes": 0.428344,
+          "read_bytes": 0.26877999999999996,
+          "resolve_vault_links": 0.252639,
+          "get_frontmatter": 0.142568,
+          "insert_note_tags": 0.091527,
+          "insert_vault_tags-insert": 0.008694,
+          "find_changes": 0.002316,
+          "insert_vault_tags-delete": 0.000211
+        }
+      },
+      {
+        "wall_seconds": 35.90187710700047,
+        "database_bytes": 230940672,
+        "stages": {
+          "parse_markdown_tree": 28.924388,
+          "insert_markdown_nodes": 10.956566,
+          "parse_frontmatter": 2.224217,
+          "insert_vault_links": 1.0908499999999999,
+          "insert_frontmatter_nodes": 0.416074,
+          "read_bytes": 0.27034600000000003,
+          "resolve_vault_links": 0.25061500000000003,
+          "get_frontmatter": 0.14667,
+          "insert_note_tags": 0.091674,
+          "insert_vault_tags-insert": 0.008732,
+          "find_changes": 0.002282,
+          "insert_vault_tags-delete": 0.00021799999999999999
+        }
+      },
+      {
+        "wall_seconds": 36.28878417299893,
+        "database_bytes": 230940672,
+        "stages": {
+          "parse_markdown_tree": 29.228148,
+          "insert_markdown_nodes": 11.018218000000001,
+          "parse_frontmatter": 2.2074059999999998,
+          "insert_vault_links": 1.105116,
+          "insert_frontmatter_nodes": 0.44056900000000004,
+          "read_bytes": 0.268675,
+          "resolve_vault_links": 0.250917,
+          "get_frontmatter": 0.142333,
+          "insert_note_tags": 0.09083799999999999,
+          "insert_vault_tags-insert": 0.008664999999999999,
+          "find_changes": 0.002235,
+          "insert_vault_tags-delete": 0.000208
+        }
+      }
+    ],
+    "rows": {
+      "vault_directories": 2,
+      "vault_notes": 10000,
+      "frontmatter_nodes": 44162,
+      "frontmatter_errors": 0,
+      "markdown_nodes": 2454252,
+      "vault_tags": 1584,
+      "note_tag_occurrences": 34169,
+      "vault_links": 140659,
+      "vault_index_state": 1
+    }
+  },
+  "verification": {
+    "all_database_rows_equal_on_each_benchmark_run": true,
+    "existing_database_upgrade_without_reparsing": {
+      "vault_directories": 1,
+      "vault_notes": 2000,
+      "frontmatter_nodes": 8847,
+      "frontmatter_errors": 0,
+      "markdown_nodes": 493193,
+      "vault_tags": 531,
+      "note_tag_occurrences": 6848,
+      "vault_links": 28471,
+      "vault_index_state": 1
+    },
+    "stage_totals_overlap": true
+  }
+}
