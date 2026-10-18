@@ -84,7 +84,7 @@ function rendererScript(bundlePath, vaultPath) {
 	}
 
 	class ButtonComponent {
-		constructor(element) { this.el = element; }
+		constructor(element) { this.el = element; this.buttonEl = element; }
 		setButtonText(text) { this.el.textContent = text; return this; }
 		setDisabled(disabled) { this.el.disabled = disabled; return this; }
 		setCta() { this.el.classList.add('mod-cta'); return this; }
