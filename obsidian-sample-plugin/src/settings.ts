@@ -1,11 +1,11 @@
 import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting } from 'obsidian';
-import MyPlugin from './main';
+import ObsidianLinterPlugin from './main';
 
-export interface MyPluginSettings {
+export interface ObsidianLinterSettings {
 	ignoredPaths: string[];
 }
 
-export const DEFAULT_SETTINGS: MyPluginSettings = {
+export const DEFAULT_SETTINGS: ObsidianLinterSettings = {
 	ignoredPaths: [],
 };
 
@@ -33,11 +33,11 @@ class IgnoredPathSuggest extends AbstractInputSuggest<string> {
 	}
 }
 
-export class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+export class ObsidianLinterSettingTab extends PluginSettingTab {
+	plugin: ObsidianLinterPlugin;
 	draftIgnoredPaths: string[] = [];
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: ObsidianLinterPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}

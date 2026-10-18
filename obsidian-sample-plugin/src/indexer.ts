@@ -1533,13 +1533,11 @@ async function run_queued_index(
 	let deletedFiles = 0;
 	do {
 		index_rerun_pending = false;
-		console.log("Vault index run started");
 		try {
 			result = await index_vault_once(vault_path, db_path, onProgress);
 			addedFiles += result.addedFiles;
 			indexedFiles += result.indexedFiles;
 			deletedFiles += result.deletedFiles;
-			console.log("Vault index run completed: " + result.indexedFiles + " files updated, " + result.deletedFiles + " files deleted");
 		} catch (error) {
 			if (!index_rerun_pending) throw error;
 		}

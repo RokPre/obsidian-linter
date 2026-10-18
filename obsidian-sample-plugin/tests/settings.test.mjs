@@ -99,7 +99,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	class Notice { constructor(message) { notices.push(message); } }
 	const compiled = await build({
 		stdin: {
-			contents: "export { SampleSettingTab } from './src/settings'; export { indexVault, setIgnoredPaths } from './src/indexer';",
+			contents: "export { ObsidianLinterSettingTab } from './src/settings'; export { indexVault, setIgnoredPaths } from './src/indexer';",
 			resolveDir: fileURLToPath(new URL('..', import.meta.url)),
 			loader: 'ts',
 		},
@@ -137,7 +137,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 			},
 		},
 	};
-	const tab = new module.exports.SampleSettingTab({ vault }, plugin);
+	const tab = new module.exports.ObsidianLinterSettingTab({ vault }, plugin);
 	tab.display();
 	return {
 		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests,
