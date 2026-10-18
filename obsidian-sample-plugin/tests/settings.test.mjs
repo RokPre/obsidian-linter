@@ -17,6 +17,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	const notices = [];
 	const errors = [];
 	const saveRequests = [];
+	const suggestions = [];
 	class FileSystemAdapter {
 		constructor(basePath) { this.basePath = basePath; }
 		getBasePath() { return this.basePath; }
@@ -25,6 +26,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 		constructor(app, inputEl) {
 			this.app = app;
 			this.inputEl = inputEl;
+			suggestions.push(this);
 		}
 		onSelect(callback) {
 			this.selectCallback = callback;
@@ -140,7 +142,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	const tab = new module.exports.ObsidianLinterSettingTab({ vault }, plugin);
 	tab.display();
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests,
+		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests, suggestions,
 		button: settings.find(setting => setting.name === 'Indexing').button,
 		get pickers() {
 			return settings.filter(setting =>
@@ -298,6 +300,86 @@ test('clearing saved exclusions and saving persists an empty list', async () => 
 		assert.deepEqual(ui.indexRequests, [[]]);
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Clear state follows blank, selected, and row-change transitions', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-clear-state-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		const ui = await settingsTab(vault);
+		const whitespaceUi = await settingsTab(vault, [' \t ']);
+		assert.equal(whitespaceUi.pickers.length, 1);
+		assert.equal(
+			whitespaceUi.buttons.find(button => button.label === 'Clear').disabled,
+			true,
+		);
+		const clear = ui.buttons.find(button => button.label === 'Clear');
+		const add = ui.buttons.find(button => button.label === 'Add');
+
+		assert.equal(ui.pickers.length, 1);
+		assert.equal(clear.disabled, true);
+
+		const input = ui.pickers[0].text;
+		input.inputEl.value = ' \t ';
+		input.change(' \t ');
+		assert.equal(clear.disabled, true);
+
+		input.inputEl.value = 'a.md';
+		input.change('a.md');
+		assert.equal(clear.disabled, false);
+
+		input.inputEl.value = ' \t ';
+		input.change(' \t ');
+		assert.equal(clear.disabled, true);
+
+		input.inputEl.value = 'a.md';
+		ui.suggestions[0].selectCallback('a.md');
+		assert.deepEqual(Array.from(ui.tab.draftIgnoredPaths), ['a.md']);
+		assert.equal(clear.disabled, false);
+
+		add.click();
+		assert.equal(ui.pickers.length, 2);
+		assert.equal(clear.disabled, false);
+
+		input.inputEl.value = '';
+		input.change('');
+		assert.deepEqual(Array.from(ui.tab.draftIgnoredPaths), ['', '']);
+		assert.equal(clear.disabled, false);
+
+		ui.pickers[1].extraButton.click();
+		assert.deepEqual(Array.from(ui.tab.draftIgnoredPaths), ['']);
+		assert.equal(clear.disabled, true);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Clear resets saved paths without persisting until Save', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-clear-draft-only-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		const ui = await settingsTab(vault, ['a.md']);
+		const clear = ui.buttons.find(button => button.label === 'Clear');
+		const add = ui.buttons.find(button => button.label === 'Add');
+		const save = ui.buttons.find(button => button.label === 'Save');
+
+		assert.equal(clear.disabled, false);
+		clear.click();
+
+		assert.equal(ui.pickers.length, 1);
+		assert.equal(ui.pickers[0].text.inputEl.value, '');
+		assert.deepEqual(Array.from(ui.tab.draftIgnoredPaths), ['']);
+		assert.equal(clear.disabled, true);
+		assert.equal(add.disabled, true);
+		assert.equal(ui.pickers[0].extraButton.disabled, true);
+		assert.equal(save.disabled, false);
+		assert.equal(save.cta, true);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['a.md']);
+		assert.deepEqual(ui.saveRequests, []);
+		assert.deepEqual(ui.indexRequests, []);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}
