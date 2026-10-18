@@ -90,6 +90,8 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 		const isOnlyBlankPicker = () =>
 			this.draftIgnoredPaths.length === 1 &&
 			this.draftIgnoredPaths[0]?.trim() === '';
+		let clearButton: ButtonComponent;
+		const updateClearButton = () => clearButton.setDisabled(isOnlyBlankPicker());
 
 		const addPathPicker = (ignoredPath: string, index?: number) => {
 			let removeButton: ExtraButtonComponent;
@@ -105,6 +107,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 							updateAddButton();
 							updateSaveButton();
 							removeButton.setDisabled(isOnlyBlankPicker());
+							updateClearButton();
 						});
 					}
 					new IgnoredPathSuggest(this.app, text.inputEl, (path) =>
@@ -116,6 +119,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 								updateAddButton();
 								updateSaveButton();
 								removeButton.setDisabled(isOnlyBlankPicker());
+								updateClearButton();
 							}
 						});
 				})
@@ -131,6 +135,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 							renderPathPickers();
 							updateAddButton();
 							updateSaveButton();
+							updateClearButton();
 						});
 				});
 		};
@@ -155,19 +160,23 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 						this.draftIgnoredPaths.push('');
 						addPathPicker('', this.draftIgnoredPaths.length - 1);
 						updateAddButton();
+						updateClearButton();
 					});
 				updateAddButton();
 			})
-			.addButton((button) =>
+			.addButton((button) => {
+				clearButton = button;
 				button
 					.setButtonText('Clear')
+					.setDisabled(isOnlyBlankPicker())
 					.onClick(() => {
 						this.draftIgnoredPaths = [''];
 						renderPathPickers();
 						updateAddButton();
 						updateSaveButton();
-					}),
-			)
+						updateClearButton();
+					});
+			})
 			.addButton((button) => {
 				saveButton = button;
 				button

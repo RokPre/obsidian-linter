@@ -6,7 +6,7 @@
 - [ ] TODO: Modified files have their nodes and source links deleted and reinserted (/home/rok/sync/vaultHelper/obsidian-sample-plugin/src/indexer.ts:894). Database node IDs therefore should not become durable identifiers in saved rules, diagnostics, or future edit plans. Use source-oriented locators and freshness information. A simple path/range plus source revision or fingerprint is a more appropriate starting point than inventing permanent identities for every Markdown node.
 - [ ] TODO: Test the sql.js file for memory usage, performance, ui stuttering and other possible issues.
 - [x] TODO: Enable Save only when the ignore-list draft is valid and has unsaved changes; disable it when unchanged, invalid, or successfully saved. Ignore blank pickers when comparing with saved settings.
-- [ ] TODO: Disable Clear when only one blank picker is present; enable it when there are paths or extra rows to clear.
+- [x] TODO: Disable Clear when only one blank picker is present; enable it when there are paths or extra rows to clear.
 - [ ] TODO: Run indexing independently of Save completion: persist settings and apply exclusions first, then request indexing without holding Save open; verify the settings remain responsive during long scans.
 - [ ] TODO: Add automated worker integration tests for startup, vault events, Save, and Index vault: use the built worker and a temporary vault; verify saved exclusions, result/error replies, one shared worker, responsive parent thread, and shutdown on unload.
 - [ ] TODO: Add settings button interaction tests.
