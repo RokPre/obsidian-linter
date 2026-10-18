@@ -85,7 +85,7 @@ else:
   assert.equal(result.status, 0, 'interrupted Python oracle must recover its exception: ' + result.stderr);
 }
 
-const FOREIGN_KEYS_SCRIPT = 'import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute(\"PRAGMA foreign_key_check\").fetchall()))';
+const FOREIGN_KEYS_SCRIPT = 'import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute("PRAGMA foreign_key_check").fetchall()))';
 
 const DUMP_SCRIPT = String.raw`
 import base64, json, sqlite3, sys
@@ -348,7 +348,7 @@ test('indexes a complete fixture with semantic parity, all table rows, tags, lin
   assert.equal((await stat(typescriptDb, { bigint: true })).mtimeNs, tsBefore.mtimeNs, 'unchanged indexing must not rewrite the database');
   oracle(vault, pythonDb);
   assertParity(pythonDb, typescriptDb, 'unchanged rerun diverged from oracle');
-  const clearLinks = ['import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"DELETE FROM vault_links\"); c.commit()'];
+  const clearLinks = ['import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("DELETE FROM vault_links"); c.commit()'];
   execFileSync(PYTHON, ['-c', clearLinks[0], pythonDb]);
   execFileSync(PYTHON, ['-c', clearLinks[0], typescriptDb]);
   oracle(vault, pythonDb);
@@ -527,7 +527,7 @@ test('uses the vault-local default database path and preserves migration rows', 
   const legacyTypescript = join(workRoot, 'legacy-typescript.db');
   await createLegacy(legacyPython, vault);
   await readFile(legacyPython).then(bytes => writeFile(legacyTypescript, bytes));
-  execFileSync(PYTHON, ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"ALTER TABLE vault_files DROP COLUMN mtime_ns\"); c.commit()', legacyTypescript]);
+  execFileSync(PYTHON, ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("ALTER TABLE vault_files DROP COLUMN mtime_ns"); c.commit()', legacyTypescript]);
   oracle(vault, legacyPython);
   await indexer.indexVault(vault, legacyTypescript);
   assertParity(legacyPython, legacyTypescript, 'legacy schema migration diverged from oracle');
