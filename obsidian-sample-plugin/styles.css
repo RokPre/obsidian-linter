@@ -26,3 +26,7 @@ If your plugin does not need CSS, delete this file.
 .vault-helper-ignore-list .extra-setting-button.is-disabled {
 	pointer-events: none;
 }
+
+.vault-helper-ignore-list .vault-helper-clear-button:disabled {
+	opacity: 0.7;
+}

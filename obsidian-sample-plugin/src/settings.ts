@@ -166,6 +166,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 			})
 			.addButton((button) => {
 				clearButton = button;
+				button.buttonEl.classList.add('vault-helper-clear-button');
 				button
 					.setButtonText('Clear')
 					.setDisabled(isOnlyBlankPicker())

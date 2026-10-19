@@ -75,6 +75,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 		addButton(configure) {
 			const button = {
 				label: '', disabled: false, cta: false,
+				buttonEl: { classList: new Set() },
 				setButtonText(label) { this.label = label; return this; },
 				setDisabled(disabled) { this.disabled = disabled; return this; },
 				setCta() { this.cta = true; return this; },
@@ -318,6 +319,10 @@ test('Clear state follows blank, selected, and row-change transitions', async ()
 		);
 		const clear = ui.buttons.find(button => button.label === 'Clear');
 		const add = ui.buttons.find(button => button.label === 'Add');
+		const save = ui.buttons.find(button => button.label === 'Save');
+		assert.equal(clear.buttonEl.classList.has('vault-helper-clear-button'), true);
+		assert.equal(add.buttonEl.classList.has('vault-helper-clear-button'), false);
+		assert.equal(save.buttonEl.classList.has('vault-helper-clear-button'), false);
 
 		assert.equal(ui.pickers.length, 1);
 		assert.equal(clear.disabled, true);
