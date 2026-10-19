@@ -6,12 +6,12 @@ export class IndexerNotice {
 	private progress: HTMLProgressElement;
 
 	constructor() {
-		const content = document.createDocumentFragment();
-		const title = document.createElement('div');
-		title.textContent = 'Vault Helper — indexing vault…';
+		const content = createFragment();
+		const title = createDiv();
+		title.textContent = 'Vault helper — indexing vault…';
 
-		this.status = document.createElement('div');
-		this.progress = document.createElement('progress');
+		this.status = createDiv();
+		this.progress = createEl('progress');
 		this.progress.setAttribute('aria-label', 'Vault indexing progress');
 
 		content.append(title, this.status, this.progress);

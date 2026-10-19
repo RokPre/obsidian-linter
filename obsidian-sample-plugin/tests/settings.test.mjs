@@ -11,7 +11,7 @@ import { build } from 'esbuild';
 
 const require = createRequire(import.meta.url);
 
-async function settingsTab(adapter, ignoredPaths = []) {
+async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 	const settings = [];
 	const buttons = [];
 	const notices = [];
@@ -58,7 +58,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 			if (parent instanceof Container) parent.children.push(this);
 		}
 		setName(name) { this.name = name; return this; }
-		setDesc() { return this; }
+		setDesc(description) { this.description = description; return this; }
 		setClass(name) { this.className = name; return this; }
 		addExtraButton(configure) {
 			const button = {
@@ -119,6 +119,7 @@ async function settingsTab(adapter, ignoredPaths = []) {
 	const vaultAdapter = typeof adapter === 'string' ? new FileSystemAdapter(adapter) : adapter;
 	const vault = {
 		adapter: vaultAdapter,
+		configDir: 'custom-config',
 		getAllLoadedFiles() {
 			if (typeof adapter !== 'string') return [];
 			return readdirSync(adapter, { recursive: true })
@@ -129,28 +130,93 @@ async function settingsTab(adapter, ignoredPaths = []) {
 		},
 	};
 	const indexRequests = [];
+	const configRequests = [];
 	const plugin = {
 		settings: { ignoredPaths: [...ignoredPaths] },
 		async saveSettings(settings) { saveRequests.push([...settings.ignoredPaths]); },
 		indexerClient: {
-			indexVault(vaultPath, paths) {
+			indexVault(vaultPath, paths, configDir) {
 				indexRequests.push([...paths]);
+				configRequests.push(configDir);
 				module.exports.setIgnoredPaths(paths);
-				return module.exports.indexVault(vaultPath);
+				return module.exports.indexVault(vaultPath, configDir);
 			},
 		},
 	};
 	const tab = new module.exports.ObsidianLinterSettingTab({ vault }, plugin);
-	tab.display();
+	let renderRoot;
+	if (renderMode === 'legacy') {
+		tab.display();
+	} else {
+		renderRoot = new Container();
+		tab.getSettingDefinitions()[0].render({ settingEl: renderRoot }, {});
+	}
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests, suggestions,
-		button: settings.find(setting => setting.name === 'Indexing').button,
+		settings, notices, errors, tab, plugin, buttons, indexRequests, configRequests, saveRequests, suggestions, renderRoot,
+		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
+		button: settings.find(setting => setting.name === 'Indexing')?.button,
 		get pickers() {
 			return settings.filter(setting =>
 				setting.name === 'Ignored path' && setting.parent.children.includes(setting));
 		},
 	};
 }
+test('declarative settings define a searchable ignored-path editor', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-declarative-'));
+	try {
+		await writeFile(join(vault, 'a.md'), '# A\n');
+		const ui = await settingsTab(vault, ['a.md'], 'declarative');
+		const definitions = ui.tab.getSettingDefinitions();
+		assert.equal(definitions.length, 1);
+		const [definition] = definitions;
+		assert.equal(definition.name, 'Blacklist for files and folders');
+		assert.equal(definition.desc, 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
+		assert.equal(typeof definition.render, 'function');
+		assert.ok(ui.renderRoot.children.length > 0);
+		assert.equal(ui.pickers.length, 1);
+		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault']);
+		assert.equal(ui.descriptions[0], definition.desc);
+		assert.equal(ui.buttons.find(button => button.label === 'Save').disabled, true);
+		assert.deepEqual(ui.saveRequests, []);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('legacy settings retain the minimum version and exact description', async () => {
+	const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+	assert.equal(manifest.minAppVersion, '1.6.6');
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-legacy-'));
+	try {
+		const ui = await settingsTab(vault);
+		assert.equal(typeof ui.tab.display, 'function');
+		assert.equal(ui.descriptions[0], 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
+		assert.equal(ui.pickers.length, 1);
+		assert.deepEqual(ui.saveRequests, []);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('declarative renderer preserves explicit clear-and-save behavior', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-declarative-clear-'));
+	try {
+		const ui = await settingsTab(vault, ['a.md'], 'declarative');
+		const clear = ui.buttons.find(button => button.label === 'Clear');
+		const save = ui.buttons.find(button => button.label === 'Save');
+		assert.equal(save.disabled, true);
+		clear.click();
+		assert.equal(save.disabled, false);
+		assert.deepEqual(ui.saveRequests, []);
+		await save.click();
+		assert.deepEqual(ui.saveRequests, [[]]);
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
+		assert.deepEqual(ui.indexRequests, [[]]);
+		assert.deepEqual(ui.configRequests, ['custom-config']);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
 
 test('unchanged and empty drafts disable Save and direct invocation has no side effects', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-save-unchanged-'));
@@ -266,6 +332,7 @@ test('blanking a saved path saves only the remaining paths, including an empty l
 		assert.deepEqual(ui.saveRequests, [['b.md']]);
 		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['b.md']);
 		assert.deepEqual(ui.indexRequests, [['b.md']]);
+		assert.deepEqual(ui.configRequests, ['custom-config']);
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
 
@@ -278,6 +345,7 @@ test('blanking a saved path saves only the remaining paths, including an empty l
 		assert.deepEqual(ui.saveRequests, [['b.md'], []]);
 		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
 		assert.deepEqual(ui.indexRequests, [['b.md'], []]);
+		assert.deepEqual(ui.configRequests, ['custom-config', 'custom-config']);
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
 	} finally {
@@ -428,7 +496,7 @@ test('successful persistence disables Save before indexing settles', async () =>
 test('settings button indexes the active vault and is re-enabled after success', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-settings-'));
 	try {
-		await mkdir(join(vault, '.obsidian'));
+		await mkdir(join(vault, 'custom-config'));
 		await writeFile(join(vault, 'note.md'), '# Note\n#project/tag\n');
 		const { button, notices, errors, plugin, buttons } = await settingsTab(vault);
 		const save = buttons.find(candidate => candidate.label === 'Save');
@@ -444,7 +512,7 @@ test('settings button indexes the active vault and is re-enabled after success',
 		assert.equal(button.disabled, false);
 		assert.equal(notices.at(-1), 'Index updated: 1 added, 0 updated, 0 removed.');
 		assert.deepEqual(errors, []);
-		const database = await readFile(join(vault, '.obsidian', 'vaultHelper.db'));
+		const database = await readFile(join(vault, 'custom-config', 'vaultHelper.db'));
 		assert.equal(database.subarray(0, 16).toString(), 'SQLite format 3\0');
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
@@ -463,7 +531,7 @@ test('settings button reports a real indexing error and is re-enabled', async ()
 		assert.equal(button.disabled, false);
 		assert.match(notices.at(-1), /^Indexing failed:/);
 		assert.equal(errors.length, 1);
-		await assert.rejects(readFile(join(vault, '.obsidian', 'vaultHelper.db')), { code: 'ENOENT' });
+		await assert.rejects(readFile(join(vault, 'custom-config', 'vaultHelper.db')), { code: 'ENOENT' });
 	} finally { await rm(vault, { recursive: true, force: true }); }
 });
 
@@ -631,6 +699,28 @@ test('Save keeps new ignore paths active and reports a subsequent indexing failu
 		assert.equal(ui.errors.length, 1);
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+test('suggestions use loaded paths, exclude root and duplicate draft paths, and update the selected row', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-suggestions-'));
+	try {
+		const ui = await settingsTab(vault, ['already.md', ''], 'declarative');
+		ui.tab.app.vault.getAllLoadedFiles = () => [
+			{ path: 'alpha.md' },
+			{ path: '/' },
+			{ path: 'already.md' },
+			{ path: 'folder/beta.md' },
+		];
+		const suggestions = ui.suggestions[1].getSuggestions('');
+		assert.deepEqual(suggestions, ['alpha.md', 'folder/beta.md']);
+		assert.equal(suggestions.includes('not-loaded.md'), false);
+		assert.equal(suggestions.includes('/'), false);
+		assert.equal(suggestions.includes('already.md'), false);
+
+		ui.suggestions[1].selectCallback(suggestions[1]);
+		assert.deepEqual(Array.from(ui.tab.draftIgnoredPaths), ['already.md', 'folder/beta.md']);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}

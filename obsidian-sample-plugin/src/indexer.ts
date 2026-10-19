@@ -13,7 +13,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 
-export const IGNORED_DIRECTORY_NAMES: Record<string, true> = { '.git': true, '.obsidian': true, templates: true, excalidraws: true, '.diaryTrash': true };
+export const IGNORED_DIRECTORY_NAMES: Record<string, true> = { '.git': true, templates: true, excalidraws: true, '.diaryTrash': true };
 let IGNORED_PATHS: string[] = [];
 
 export function setIgnoredPaths(paths: string[]): void {
@@ -80,7 +80,7 @@ export function print_timing_summary(): void {
 	}
 }
 
-export function find_changes(cursor: Cursor, vault_path: string): [Array<[string, string]>, Array<[string, string]>] {
+export function find_changes(cursor: Cursor, vault_path: string, config_dir: string): [Array<[string, string]>, Array<[string, string]>] {
 	const has_files = cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vault_files'").fetchone() !== null;
 	// SQLite integers exceed JavaScript's safe integer range for nanosecond mtimes.
 	const stored_mtimes = new Map<string, string>(has_files ? cursor.execute('SELECT path, CAST(mtime_ns AS TEXT) FROM vault_files').fetchall() as [string, string][] : []);
@@ -88,6 +88,7 @@ export function find_changes(cursor: Cursor, vault_path: string): [Array<[string
 	const stored_inodes = new Map<string, string>(has_directories ? cursor.execute('SELECT path, CAST(inode AS TEXT) FROM vault_directories').fetchall() as [string, string][] : []);
 	const directory_changes: Array<[string, string]> = [];
 	const file_changes: Array<[string, string]> = [];
+	const config_path = path.normalize(config_dir).split(path.sep).join('/');
 
 	function scan_directory(directory: string): void {
 		const stored_inode = stored_inodes.get(directory);
@@ -100,7 +101,7 @@ export function find_changes(cursor: Cursor, vault_path: string): [Array<[string
 				if (child.isSymbolicLink()) continue;
 				const child_path = path.join(directory, child.name);
 				const vault_relative_path = path.relative(vault_path, child_path).split(path.sep).join('/');
-				if (IGNORED_PATHS.includes(vault_relative_path)) continue;
+				if (IGNORED_PATHS.includes(vault_relative_path) || vault_relative_path === config_path) continue;
 				if (child.isDirectory() && IGNORED_DIRECTORY_NAMES[child.name] !== true) scan_directory(child_path);
 				else if (child.isFile()) {
 					const started = performance.now();
@@ -900,9 +901,12 @@ export function parse_file(filePath: string, markdown_parser: MarkdownTreeParser
 
 export function insert_file(cursor: Cursor, parsed: ParsedFile, directory_id: number): number {
 	const filePath = parsed.path;
+	const suffix = graph_python_suffix(filePath);
+	const extension = suffix === "." ? "" : suffix.toLowerCase();
+	const name = path.basename(filePath, extension === "" ? "" : suffix);
 	cursor.execute(
 		"INSERT INTO vault_files (directory_id, path, name, inode, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET directory_id = excluded.directory_id, name = excluded.name, inode = excluded.inode, mtime_ns = excluded.mtime_ns, extension = excluded.extension, kind = excluded.kind RETURNING id",
-		[directory_id, filePath, path.basename(filePath, graph_python_suffix(filePath)), parsed.inode, parsed.mtime_ns, graph_python_suffix(filePath).toLowerCase(), parsed.kind],
+		[directory_id, filePath, name, parsed.inode, parsed.mtime_ns, extension, parsed.kind],
 	);
 	const row = cursor.fetchone();
 	if (row === null || row[0] === undefined || row[0] === null) throw new Error("Failed to insert vault file");
@@ -1506,6 +1510,7 @@ export type IndexProgress = { phase: 'scanning' | 'finishing' } | { phase: 'inde
 
 export function indexVault(
 	vault_path: string,
+	config_dir: string,
 	db_path?: string,
 	onProgress?: (progress: IndexProgress) => void,
 ): Promise<IndexResult> {
@@ -1513,7 +1518,7 @@ export function indexVault(
 		index_rerun_pending = true;
 		return active_index;
 	}
-	const run = run_queued_index(vault_path, db_path, onProgress);
+	const run = run_queued_index(vault_path, config_dir, db_path, onProgress);
 	active_index = run;
 	void run.then(
 		() => { if (active_index === run) active_index = undefined; },
@@ -1524,6 +1529,7 @@ export function indexVault(
 
 async function run_queued_index(
 	vault_path: string,
+	config_dir: string,
 	db_path?: string,
 	onProgress?: (progress: IndexProgress) => void,
 ): Promise<IndexResult> {
@@ -1534,7 +1540,7 @@ async function run_queued_index(
 	do {
 		index_rerun_pending = false;
 		try {
-			result = await index_vault_once(vault_path, db_path, onProgress);
+			result = await index_vault_once(vault_path, config_dir, db_path, onProgress);
 			addedFiles += result.addedFiles;
 			indexedFiles += result.indexedFiles;
 			deletedFiles += result.deletedFiles;
@@ -1548,6 +1554,7 @@ async function run_queued_index(
 
 async function index_vault_once(
 	vault_path: string,
+	config_dir: string,
 	db_path?: string,
 	onProgress?: (progress: IndexProgress) => void,
 ): Promise<IndexResult> {
@@ -1556,7 +1563,7 @@ async function index_vault_once(
 	if (!fs.existsSync(vault_path)) throw new Error(`Path does not exist: ${vault_path}`);
 	if (!fs.statSync(vault_path).isDirectory()) throw new Error(`Path is not a directory: ${vault_path}`);
 	vault_path = fs.realpathSync(vault_path);
-	db_path = db_path ?? path.join(vault_path, '.obsidian', 'vaultHelper.db');
+	db_path = db_path ?? path.join(vault_path, config_dir, 'vaultHelper.db');
 	db_path = path.resolve(db_path === '~' || db_path.startsWith('~/') ? path.join(os.homedir(), db_path.slice(2)) : db_path);
 	const SQL = await (sqlite ??= initSqlJs({ wasmBinary: sqliteBinary.buffer }));
 	const connection = new SQL.Database(fs.existsSync(db_path) ? fs.readFileSync(db_path) : undefined);
@@ -1591,7 +1598,7 @@ async function index_vault_once(
 		cursor.execute('BEGIN');
 		initialize_database(cursor);
 		const derived_data_dirty = Boolean(cursor.execute('SELECT derived_data_dirty FROM vault_index_state WHERE id = 1').fetchone()![0]);
-		const [changed_directories, changed_files] = find_changes(cursor, vault_path);
+		const [changed_directories, changed_files] = find_changes(cursor, vault_path, config_dir);
 		let added_files = 0;
 		for (const [action] of changed_files) {
 			if (action === 'created') added_files++;
@@ -1643,7 +1650,7 @@ async function index_vault_once(
 				}
 				if ((index + 1) % 1_000 === 0 || index + 1 === files_to_index.length) console.debug(`Indexed ${index + 1}/${files_to_index.length} files`);
 				// Keep one file's AST in memory and allow Obsidian to process UI events.
-				if ((index + 1) % 25 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
+				if ((index + 1) % 25 === 0) await new Promise<void>(resolve => self.setTimeout(resolve, 0));
 			}
 		}
 		onProgress?.({ phase: 'finishing' });

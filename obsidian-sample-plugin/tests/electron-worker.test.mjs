@@ -66,7 +66,7 @@ async function runElectron(appDir, configPath) {
 	return { ...outcome, stdout, stderr };
 }
 
-function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath) {
+function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath, configDir) {
 	return `(async () => {
 	const { IndexerClient } = require(${JSON.stringify(clientPath)});
 	const progress = [];
@@ -96,7 +96,7 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath) {
 		const armed = waitForSignal('armed');
 		await armed;
 		const paused = waitForSignal('paused');
-		const resultPromise = client.indexVault(${JSON.stringify(vaultPath)}, ['excluded.md']);
+		const resultPromise = client.indexVault(${JSON.stringify(vaultPath)}, ['excluded.md'], ${JSON.stringify(configDir)});
 		resultPromise.then(() => { settled = true; }, () => { settled = true; });
 		resultPromise.catch(() => {});
 		const pauseMessage = await Promise.race([
@@ -115,7 +115,7 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath) {
 		Atomics.store(gate, 0, 1);
 		Atomics.notify(gate, 0);
 		const result = await resultPromise;
-		const secondResult = await client.indexVault(${JSON.stringify(vaultPath)}, ['excluded.md']);
+		const secondResult = await client.indexVault(${JSON.stringify(vaultPath)}, ['excluded.md'], ${JSON.stringify(configDir)});
 		if (secondResult.addedFiles !== 0 || secondResult.indexedFiles !== 0 || secondResult.deletedFiles !== 0) {
 			throw new Error('second request through the same client reported file changes');
 		}
@@ -123,7 +123,7 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath) {
 		client.stop();
 		let stoppedRequestError;
 		try {
-			await client.indexVault(${JSON.stringify(vaultPath)}, ['excluded.md']);
+			await client.indexVault(${JSON.stringify(vaultPath)}, ['excluded.md'], ${JSON.stringify(configDir)});
 		} catch (error) {
 			stoppedRequestError = error.message;
 		}
@@ -132,7 +132,7 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath) {
 		failingClient = new IndexerClient(${JSON.stringify(missingWorkerPath)}, (update) => failingProgress.push(update));
 		let workerLoadError;
 		try {
-			await failingClient.indexVault(${JSON.stringify(vaultPath)}, []);
+			await failingClient.indexVault(${JSON.stringify(vaultPath)}, [], ${JSON.stringify(configDir)});
 		} catch (error) {
 			workerLoadError = error.message;
 		}
@@ -168,8 +168,10 @@ test('real IndexerClient worker indexes included notes without blocking the rend
 		}
 
 		const vaultPath = join(workRoot, 'vault');
+		const configDir = 'custom-settings';
 		const appDir = join(workRoot, 'electron-app');
-		await mkdir(join(vaultPath, '.obsidian'), { recursive: true });
+		await mkdir(join(vaultPath, configDir), { recursive: true });
+		await writeFile(join(vaultPath, configDir, 'config-note.md'), '# Config note\n');
 		await mkdir(appDir, { recursive: true });
 		for (let index = 0; index < 26; index += 1) {
 			await writeFile(join(vaultPath, `note-${String(index).padStart(2, '0')}.md`), `# Note ${index}\n`);
@@ -230,7 +232,7 @@ app.whenReady().then(async () => {
 `);
 		await writeFile(configPath, JSON.stringify({
 			rendererPath,
-			script: rendererScript(clientBundle, workerEntry, missingWorkerPath, vaultPath),
+			script: rendererScript(clientBundle, workerEntry, missingWorkerPath, vaultPath, configDir),
 		}));
 
 		const outcome = await runElectron(appDir, configPath);
@@ -242,7 +244,7 @@ app.whenReady().then(async () => {
 		assert.equal(payload.value.workerArmed, true);
 		assert.equal(payload.value.timerRan, true);
 		assert.deepEqual(payload.value.secondResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 0,
 			deletedFiles: 0,
@@ -256,7 +258,7 @@ app.whenReady().then(async () => {
 		assert.equal(payload.value.progress.at(-1), null, 'successful indexing did not clear progress');
 		assert.equal(payload.value.failingProgress.at(-1), null, 'worker-load failure did not clear progress');
 		assert.deepEqual(payload.value.result, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 26,
 			indexedFiles: 26,
 			deletedFiles: 0,
@@ -267,6 +269,7 @@ app.whenReady().then(async () => {
 		assert.ok(paths.every((path) => path.endsWith('.md')));
 		assert.ok(paths.some((path) => path.endsWith('note-00.md')));
 		assert.ok(!paths.some((path) => path.endsWith('excluded.md')));
+		assert.ok(!paths.some((path) => path.endsWith('config-note.md')));
 	} finally {
 		if (workRoot) await rm(workRoot, { recursive: true, force: true });
 	}

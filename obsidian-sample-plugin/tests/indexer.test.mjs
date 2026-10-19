@@ -3,11 +3,14 @@ import { isDeepStrictEqual } from 'node:util';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { test, before, after } from 'node:test';
 import { build } from 'esbuild';
+
+const savedSelf = globalThis.self;
+globalThis.self = globalThis;
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = resolve(TEST_DIR, '..');
@@ -22,6 +25,7 @@ const TABLES = [
 ];
 
 let indexer;
+const indexVault = (vaultPath, databasePath, onProgress) => indexer.indexVault(vaultPath, '.obsidian', databasePath, onProgress);
 let bundlePath;
 let workRoot;
 
@@ -45,6 +49,8 @@ before(async () => {
 after(async () => {
   if (bundlePath) await rm(bundlePath, { force: true });
   if (workRoot) await rm(workRoot, { recursive: true, force: true });
+  if (savedSelf === undefined) delete globalThis.self;
+  else globalThis.self = savedSelf;
 });
 
 function oracle(vault, database) {
@@ -298,13 +304,14 @@ Paragraph ^source-block
   '.obsidian/app.json': '{}\n',
   'templates/template.md': '# ignored\n',
   'excalidraws/drawing.md': '# ignored\n',
+  '.diaryTrash/trash.md': '# ignored\n',
 };
 
 async function runBoth(vault, name) {
   const pythonDb = join(workRoot, `${name}-python.db`);
   const typescriptDb = join(workRoot, `${name}-typescript.db`);
   oracle(vault, pythonDb);
-  const result = await indexer.indexVault(vault, typescriptDb);
+  const result = await indexVault(vault, typescriptDb);
   assert.equal(result.databasePath, typescriptDb);
   assertParity(pythonDb, typescriptDb, `Python/TypeScript database mismatch for ${name}`);
   return { pythonDb, typescriptDb, result };
@@ -342,7 +349,7 @@ test('indexes a complete fixture with semantic parity, all table rows, tags, lin
   await symlink('Target.md', join(vault, 'target-link.md'));
   const { pythonDb, typescriptDb } = await runBoth(vault, 'complete');
   const tsBefore = await stat(typescriptDb, { bigint: true });
-  const result = await indexer.indexVault(vault, typescriptDb);
+  const result = await indexVault(vault, typescriptDb);
   assert.equal(result.indexedFiles, 0);
   assert.equal(result.deletedFiles, 0);
   assert.equal((await stat(typescriptDb, { bigint: true })).mtimeNs, tsBefore.mtimeNs, 'unchanged indexing must not rewrite the database');
@@ -352,7 +359,7 @@ test('indexes a complete fixture with semantic parity, all table rows, tags, lin
   execFileSync(PYTHON, ['-c', clearLinks[0], pythonDb]);
   execFileSync(PYTHON, ['-c', clearLinks[0], typescriptDb]);
   oracle(vault, pythonDb);
-  await indexer.indexVault(vault, typescriptDb);
+  await indexVault(vault, typescriptDb);
   assertParity(pythonDb, typescriptDb, 'empty vault_links backfill diverged from oracle');
   const snapshot = semanticSnapshot(typescriptDb);
   assert(snapshot.frontmatter_errors.rows.length >= 1, 'malformed YAML must be retained as an error');
@@ -371,7 +378,7 @@ test('indexes a complete fixture with semantic parity, all table rows, tags, lin
   const noteWithTrailingDot = snapshot.vault_files.rows.find(row => row.path.endsWith('/note.md.'));
   assert.deepEqual(
     [noteWithTrailingDot?.name, noteWithTrailingDot?.extension, noteWithTrailingDot?.kind],
-    ['note.md', '.', 'other'],
+    ['note.md.', '', 'other'],
   );
   const kinds = Object.create(null);
   for (const row of snapshot.vault_files.rows) kinds[row.kind] = true;
@@ -403,7 +410,7 @@ test('rolls back a failed file parse without dirtying the previous index', async
   const failedOracle = spawnSync(PYTHON, [ORACLE, vault, pythonDb], { cwd: ROOT_DIR, encoding: 'utf8', env: { ...process.env, PATH: NODE_BIN } });
   assert.notEqual(failedOracle.status, 0, 'invalid UTF-8 must fail the oracle parse');
   let failedTypescript = false;
-  try { await indexer.indexVault(vault, typescriptDb); } catch { failedTypescript = true; }
+  try { await indexVault(vault, typescriptDb); } catch { failedTypescript = true; }
   assert(failedTypescript, 'invalid UTF-8 must reject the TypeScript index operation');
   assert.deepStrictEqual(semanticSnapshot(pythonDb), beforePython);
   assert.deepStrictEqual(semanticSnapshot(typescriptDb), beforeTypescript);
@@ -426,7 +433,7 @@ test('reconciles modifications, deletion, directory rename, file/folder replacem
   await writeFile(join(vault, 'swap.md'), '# Swap\n');
 
   const py = oracle(vault, pythonDb);
-  const tsResult = await indexer.indexVault(vault, typescriptDb);
+  const tsResult = await indexVault(vault, typescriptDb);
   assert.equal(typeof tsResult.indexedFiles, 'number');
   assert.equal(typeof tsResult.deletedFiles, 'number');
   assert(tsResult.indexedFiles > 0);
@@ -439,13 +446,13 @@ test('reconciles modifications, deletion, directory rename, file/folder replacem
   await mkdir(join(vault, 'swap'));
   await writeFile(join(vault, 'swap', 'child.md'), '# Child swap\n');
   oracle(vault, pythonDb);
-  await indexer.indexVault(vault, typescriptDb);
+  await indexVault(vault, typescriptDb);
   assertParity(pythonDb, typescriptDb, 'file/folder replacement diverged from oracle');
 
   await markDirty(pythonDb);
   await markDirty(typescriptDb);
   oracle(vault, pythonDb);
-  const recovered = await indexer.indexVault(vault, typescriptDb);
+  const recovered = await indexVault(vault, typescriptDb);
   assertParity(pythonDb, typescriptDb, 'dirty derived-data recovery diverged from oracle');
   assert.equal(semanticSnapshot(typescriptDb).vault_index_state.rows[0].derived_data_dirty, 0);
   assert.equal(recovered.deletedFiles, 0);
@@ -471,7 +478,7 @@ test('recovers an interruption on the first 1001-file batch after 1000 committed
     return originalReadFileSync.call(this, filePath, ...args);
   };
   try {
-    await assert.rejects(indexer.indexVault(vault, typescriptDb), /intentional batch interruption/);
+    await assert.rejects(indexVault(vault, typescriptDb), /intentional batch interruption/);
   } finally {
     fs.readFileSync = originalReadFileSync;
   }
@@ -482,7 +489,7 @@ test('recovers an interruption on the first 1001-file batch after 1000 committed
   assert.equal(partial.note_tag_occurrences.rows.length, 0);
   assert.equal(partial.vault_index_state.rows[0].derived_data_dirty, 1);
   oracle(vault, pythonDb);
-  await indexer.indexVault(vault, typescriptDb);
+  await indexVault(vault, typescriptDb);
   assertParity(pythonDb, typescriptDb, 'interrupted first batch recovery diverged from oracle');
   const recovered = semanticSnapshot(typescriptDb);
   assert.equal(recovered.vault_files.rows.length, 1001);
@@ -500,12 +507,12 @@ test('recovers a failed 1000-file batch after the invalid final file is removed'
   await writeFile(invalid, Buffer.from([0xc3, 0x28]));
   const failedOracle = spawnSync(PYTHON, [ORACLE, vault, pythonDb], { cwd: ROOT_DIR, encoding: 'utf8', env: { ...process.env, PATH: NODE_BIN } });
   assert.notEqual(failedOracle.status, 0);
-  await assert.rejects(() => indexer.indexVault(vault, typescriptDb));
+  await assert.rejects(() => indexVault(vault, typescriptDb));
   assert.deepStrictEqual(semanticSnapshot(pythonDb), beforePython);
   assert.deepStrictEqual(semanticSnapshot(typescriptDb), beforeTypescript);
   await rm(invalid);
   oracle(vault, pythonDb);
-  await indexer.indexVault(vault, typescriptDb);
+  await indexVault(vault, typescriptDb);
   assertParity(pythonDb, typescriptDb, '1000-file recovery diverged from oracle');
 });
 
@@ -519,7 +526,7 @@ test('preserves autolink boundaries next to typographic quotes and parentheses',
 test('uses the vault-local default database path and preserves migration rows', async () => {
   const vault = await makeVault('default-and-legacy', { 'legacy.md': '# Legacy\n' });
   const expected = join(vault, '.obsidian', 'vaultHelper.db');
-  const result = await indexer.indexVault(vault);
+  const result = await indexVault(vault);
   assert.equal(result.databasePath, expected);
   assert.equal((await stat(expected)).isFile(), true);
 
@@ -529,10 +536,72 @@ test('uses the vault-local default database path and preserves migration rows', 
   await readFile(legacyPython).then(bytes => writeFile(legacyTypescript, bytes));
   execFileSync(PYTHON, ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("ALTER TABLE vault_files DROP COLUMN mtime_ns"); c.commit()', legacyTypescript]);
   oracle(vault, legacyPython);
-  await indexer.indexVault(vault, legacyTypescript);
+  await indexVault(vault, legacyTypescript);
   assertParity(legacyPython, legacyTypescript, 'legacy schema migration diverged from oracle');
   const migrated = rawSnapshot(legacyTypescript);
   assert(!migrated.markdown_nodes.columns.includes('heading_text'));
   assert(!migrated.vault_links.columns.includes('target_heading'));
   assert(!migrated.vault_links.columns.includes('target_block_id'));
+});
+test('uses vault configDir for default database and excludes only its subtree', async () => {
+  const vault = await makeVault('custom-config-dir', {
+    'vault-config/private.md': '# Private\n',
+    'vault-config/nested/private.md': '# Nested private\n',
+    'nested/vault-config/visible.md': '# Visible\n',
+    '.obsidian/visible.md': '# Custom config leaves .obsidian indexable\n',
+    'note.md': '# Note\n',
+  });
+  const configDir = 'vault-config';
+  const expectedDatabase = join(vault, configDir, 'vaultHelper.db');
+  const result = await indexer.indexVault(vault, configDir);
+  assert.equal(result.databasePath, expectedDatabase);
+  const indexedPaths = rawSnapshot(result.databasePath).vault_files.rows
+    .map(file => relative(vault, file.path))
+    .sort();
+  assert.deepEqual(indexedPaths, ['.obsidian/visible.md', 'nested/vault-config/visible.md', 'note.md']);
+});
+test('applies user ignored file and directory paths with a custom configDir', async () => {
+  indexer.setIgnoredPaths([]);
+  const vault = await makeVault('user-ignored-paths', {
+    'custom-settings/config-note.md': '# Config note\n',
+    'ignored.md': '# Ignored file\n',
+    'ignored-folder/nested/hidden.md': '# Ignored descendant\n',
+    'note.md': '# Control note\n',
+  });
+  try {
+    indexer.setIgnoredPaths(['ignored.md', 'ignored-folder']);
+    const result = await indexer.indexVault(vault, 'custom-settings');
+    const snapshot = rawSnapshot(result.databasePath);
+    const indexedPaths = snapshot.vault_files.rows
+      .map(file => relative(vault, file.path))
+      .sort();
+    const indexedDirectories = snapshot.vault_directories.rows
+      .map(directory => relative(vault, directory.path));
+    assert.deepEqual(indexedPaths, ['note.md']);
+    assert(!indexedDirectories.includes('ignored-folder'));
+  } finally {
+    indexer.setIgnoredPaths([]);
+  }
+});
+test('yields through the worker-scoped timer every 25 files', async () => {
+  const vault = await makeVault('worker-scoped-timer', Object.fromEntries(
+    Array.from({ length: 26 }, (_, index) => [`note-${index}.md`, `# Note ${index}\n`]),
+  ));
+  const originalSelf = globalThis.self;
+  const schedule = globalThis.setTimeout;
+  const delays = [];
+  globalThis.self = {
+    setTimeout(callback, delay) {
+      delays.push(delay);
+      return schedule(callback, delay);
+    },
+  };
+  try {
+    const result = await indexVault(vault, join(workRoot, 'worker-scoped-timer.db'));
+    assert.equal(result.indexedFiles, 26);
+    assert.deepEqual(delays, [0]);
+  } finally {
+    if (originalSelf === undefined) delete globalThis.self;
+    else globalThis.self = originalSelf;
+  }
 });

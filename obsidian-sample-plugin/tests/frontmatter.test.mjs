@@ -103,7 +103,7 @@ test('escapes, non-BMP scalars, CRLF comments, and block collections match Pytho
   await writeFile(join(vault, 'note.md'), source);
   const nodeDb = join(workRoot, 'node-valid.db');
   const pythonDb = join(workRoot, 'python-valid.db');
-  await indexer.indexVault(vault, nodeDb);
+  await indexer.indexVault(vault, '.obsidian', nodeDb);
   oracle(vault, pythonDb);
   const actual = dump(nodeDb);
   const expected = dump(pythonDb);

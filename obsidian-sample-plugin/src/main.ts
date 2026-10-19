@@ -49,7 +49,7 @@ export default class ObsidianLinterPlugin extends Plugin {
 		const indexCurrentVault = () => {
 			const adapter = this.app.vault.adapter;
 			if (!(adapter instanceof FileSystemAdapter)) return;
-			return this.indexerClient.indexVault(adapter.getBasePath(), this.settings.ignoredPaths).catch((error) => {
+			return this.indexerClient.indexVault(adapter.getBasePath(), this.settings.ignoredPaths, this.app.vault.configDir).catch((error) => {
 				console.error('Vault indexing failed', error);
 			});
 		};

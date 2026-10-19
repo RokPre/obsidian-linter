@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsidian';
 import ObsidianLinterPlugin from './main';
 
 export interface ObsidianLinterSettings {
@@ -32,6 +32,12 @@ class IgnoredPathSuggest extends AbstractInputSuggest<string> {
 		this.close();
 	}
 }
+type LocalSettingDefinition = {
+	name: string;
+	desc: string;
+	render: (setting: Setting, group: SettingGroup) => void | (() => void);
+};
+
 
 export class ObsidianLinterSettingTab extends PluginSettingTab {
 	plugin: ObsidianLinterPlugin;
@@ -50,17 +56,28 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 			paths.indexOf(path) === index);
 	}
 
-	display(): void {
-		this.draftIgnoredPaths = [...this.plugin.settings.ignoredPaths];
-		const { containerEl } = this;
+	getSettingDefinitions(): LocalSettingDefinition[] {
+		return [{
+			name: 'Blacklist for files and folders',
+			desc: 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.',
+			render: (setting) => this.renderSettings(setting.settingEl),
+		}];
+	}
 
+	display(): void {
+		this.renderSettings(this.containerEl);
+	}
+
+	private renderSettings(containerEl: HTMLElement): void {
+		this.draftIgnoredPaths = [...this.plugin.settings.ignoredPaths];
 		containerEl.empty();
 
 		const ignoreListEl = containerEl.createDiv({ cls: 'vault-helper-ignore-list' });
 		new Setting(ignoreListEl)
 			.setName('Blacklist for files and folders')
-			.setDesc('Exclude files or folders from indexing. Paths are relative to the vault root. Press Save to apply changes.');
+			.setDesc('Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
 		const pathPickersEl = ignoreListEl.createDiv();
+
 
 		let addButton: ButtonComponent;
 		const updateAddButton = () => {
@@ -199,7 +216,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 						const adapter = this.app.vault.adapter;
 						if (adapter instanceof FileSystemAdapter) {
 							try {
-								const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths);
+								const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths, this.app.vault.configDir);
 								new Notice(`Index updated: ${result.addedFiles} added, ${result.indexedFiles - result.addedFiles} updated, ${result.deletedFiles} removed.`);
 							} catch (error) {
 								console.error('Vault indexing failed', error);
@@ -224,7 +241,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 						}
 						button.setDisabled(true);
 						try {
-							const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths);
+							const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths, this.app.vault.configDir);
 							new Notice(`Index updated: ${result.addedFiles} added, ${result.indexedFiles - result.addedFiles} updated, ${result.deletedFiles} removed.`);
 						} catch (error) {
 							console.error('Vault indexing failed', error);
