@@ -32,6 +32,14 @@ class IgnoredPathSuggest extends AbstractInputSuggest<string> {
 		this.close();
 	}
 }
+type LocalSettingDefinition = {
+	id: string;
+	name: string;
+	description: string;
+	type: 'custom';
+	render: (containerEl: HTMLElement) => void;
+};
+
 
 export class ObsidianLinterSettingTab extends PluginSettingTab {
 	plugin: ObsidianLinterPlugin;
@@ -50,17 +58,30 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 			paths.indexOf(path) === index);
 	}
 
-	display(): void {
-		this.draftIgnoredPaths = [...this.plugin.settings.ignoredPaths];
-		const { containerEl } = this;
+	getSettingDefinitions(): LocalSettingDefinition[] {
+		return [{
+			id: 'ignoredPaths',
+			name: 'Blacklist for files and folders',
+			description: 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.',
+			type: 'custom',
+			render: (containerEl) => this.renderSettings(containerEl),
+		}];
+	}
 
+	display(): void {
+		this.renderSettings(this.containerEl);
+	}
+
+	private renderSettings(containerEl: HTMLElement): void {
+		this.draftIgnoredPaths = [...this.plugin.settings.ignoredPaths];
 		containerEl.empty();
 
 		const ignoreListEl = containerEl.createDiv({ cls: 'vault-helper-ignore-list' });
 		new Setting(ignoreListEl)
 			.setName('Blacklist for files and folders')
-			.setDesc('Exclude files or folders from indexing. Paths are relative to the vault root. Press Save to apply changes.');
+			.setDesc('Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
 		const pathPickersEl = ignoreListEl.createDiv();
+
 
 		let addButton: ButtonComponent;
 		const updateAddButton = () => {
