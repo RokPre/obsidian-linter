@@ -26,12 +26,13 @@ const skipReason = electron === null
 const DATABASE_QUERY = "import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps([r[0] for r in c.execute('SELECT path FROM vault_files ORDER BY path')]))";
 const DATABASE_INTEGRITY_QUERY = "import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute('PRAGMA integrity_check').fetchone()[0]))";
 
-function rendererScript(bundlePath, vaultPath) {
+function rendererScript(bundlePath, vaultPath, configDir) {
 	return `(async () => {
 	const Module = require('node:module');
 	const fs = require('node:fs');
 	const path = require('node:path');
 	const vaultPath = ${JSON.stringify(vaultPath)};
+	const configDir = ${JSON.stringify(configDir)};
 	const originalLoad = Module._load;
 	const settings = [];
 	const vaultFiles = Array.from({ length: 26 }, (_, index) => ({
@@ -183,7 +184,7 @@ function rendererScript(bundlePath, vaultPath) {
 	const app = {
 		vault: {
 			adapter,
-			configDir: '.obsidian',
+			configDir,
 			getAllLoadedFiles() { return vaultFiles; },
 			getAbstractFileByPath(relativePath) {
 				return vaultFiles.find((file) => file.path === relativePath) ?? null;
@@ -201,10 +202,13 @@ function rendererScript(bundlePath, vaultPath) {
 		return originalLoad.call(this, request, parent, isMain);
 	};
 	window.activeDocument = document;
+	window.createFragment = () => document.createDocumentFragment();
+	window.createDiv = () => document.createElement('div');
+	window.createEl = (tag) => document.createElement(tag);
 
 	try {
 		const PluginClass = require(${JSON.stringify(bundlePath)}).default;
-		plugin = new PluginClass(app, { id: 'vault-helper', dir: '.obsidian/plugins/vault-helper' });
+		plugin = new PluginClass(app, { id: 'vault-helper', dir: ${JSON.stringify(configDir + '/plugins/vault-helper')} });
 		await plugin.onload();
 		settingTab.display();
 		const originalIndexVault = plugin.indexerClient.indexVault.bind(plugin.indexerClient);
@@ -413,13 +417,15 @@ test('production bundle handles a modify event during startup indexing in Electr
 		}
 
 		const vaultPath = join(workRoot, 'vault');
-		const pluginPath = join(vaultPath, '.obsidian', 'plugins', 'vault-helper');
+		const configDir = 'vault-config';
+		const pluginPath = join(vaultPath, configDir, 'plugins', 'vault-helper');
 		const appDir = join(workRoot, 'electron-app');
 		const bundlePath = join(appDir, 'plugin-main.cjs');
 		const rendererPath = join(appDir, 'renderer.html');
 		const mainPath = join(appDir, 'main.cjs');
 		const configPath = join(appDir, 'config.json');
 		await mkdir(pluginPath, { recursive: true });
+		await writeFile(join(vaultPath, configDir, 'config-note.md'), '# Config note\n');
 		await mkdir(appDir, { recursive: true });
 		for (let index = 0; index < 26; index += 1) {
 			await writeFile(join(vaultPath, 'note-' + String(index).padStart(2, '0') + '.md'), '# Bundle fixture ' + index);
@@ -464,7 +470,7 @@ app.whenReady().then(async () => {
 `);
 		await writeFile(configPath, JSON.stringify({
 			rendererPath,
-			script: rendererScript(bundlePath, vaultPath),
+			script: rendererScript(bundlePath, vaultPath, configDir),
 		}));
 
 		const result = spawnSync(electron, ['--disable-gpu', appDir], {
@@ -491,19 +497,19 @@ app.whenReady().then(async () => {
 		assert.equal(payload.value.deleteRequestCount, 1);
 		assert.equal(payload.value.createRequestCount, 2);
 		assert.deepEqual(payload.value.createResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 1,
 			indexedFiles: 1,
 			deletedFiles: 0,
 		});
 		assert.deepEqual(payload.value.deleteRunResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 26,
 			deletedFiles: 0,
 		});
 		assert.deepEqual(payload.value.deleteResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 0,
 			deletedFiles: 1,
@@ -512,25 +518,25 @@ app.whenReady().then(async () => {
 		assert.equal(payload.value.saveRequestCount, 1);
 		assert.deepEqual(payload.value.savedIgnoredPaths, ['note-02.md']);
 		assert.deepEqual(payload.value.saveResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 0,
 			deletedFiles: 1,
 		});
 		assert.deepEqual(payload.value.renameCreateResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 1,
 			indexedFiles: 1,
 			deletedFiles: 0,
 		});
 		assert.deepEqual(payload.value.renameRunResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 26,
 			deletedFiles: 0,
 		});
 		assert.deepEqual(payload.value.renameResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 1,
 			indexedFiles: 1,
 			deletedFiles: 1,
@@ -538,20 +544,20 @@ app.whenReady().then(async () => {
 		assert.equal(payload.value.modifyRequestCount, 1);
 		assert.equal(payload.value.mutationOccurredDuringRun, true);
 		assert.deepEqual(payload.value.startupResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 26,
 			indexedFiles: 26,
 			deletedFiles: 0,
 		});
 		assert.deepEqual(payload.value.modifyResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 25,
 			deletedFiles: 0,
 		});
 		assert.equal(payload.value.manualRequestCount, 1);
 		assert.deepEqual(payload.value.manualResult, {
-			databasePath: join(vaultPath, '.obsidian', 'vaultHelper.db'),
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
 			addedFiles: 0,
 			indexedFiles: 0,
 			deletedFiles: 0,
@@ -574,6 +580,7 @@ app.whenReady().then(async () => {
 		assert.ok(indexedPaths.every((path) => !path.endsWith('/' + payload.value.deletedPath)));
 		assert.ok(indexedPaths.every((path) => !path.endsWith('/note-02.md')));
 		assert.ok(indexedPaths.some((path) => path.endsWith('/' + payload.value.renamedPath)));
+		assert.ok(indexedPaths.every((path) => !path.endsWith('/config-note.md')));
 		assert.equal(JSON.parse(execFileSync(PYTHON, ['-c', DATABASE_INTEGRITY_QUERY, databasePath], { encoding: 'utf8' })), 'ok');
 	} finally {
 		if (workRoot) await rm(workRoot, { recursive: true, force: true });

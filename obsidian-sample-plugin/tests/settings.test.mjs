@@ -119,6 +119,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 	const vaultAdapter = typeof adapter === 'string' ? new FileSystemAdapter(adapter) : adapter;
 	const vault = {
 		adapter: vaultAdapter,
+		configDir: 'custom-config',
 		getAllLoadedFiles() {
 			if (typeof adapter !== 'string') return [];
 			return readdirSync(adapter, { recursive: true })
@@ -129,14 +130,16 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		},
 	};
 	const indexRequests = [];
+	const configRequests = [];
 	const plugin = {
 		settings: { ignoredPaths: [...ignoredPaths] },
 		async saveSettings(settings) { saveRequests.push([...settings.ignoredPaths]); },
 		indexerClient: {
-			indexVault(vaultPath, paths) {
+			indexVault(vaultPath, paths, configDir) {
 				indexRequests.push([...paths]);
+				configRequests.push(configDir);
 				module.exports.setIgnoredPaths(paths);
-				return module.exports.indexVault(vaultPath);
+				return module.exports.indexVault(vaultPath, configDir);
 			},
 		},
 	};
@@ -149,7 +152,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		tab.getSettingDefinitions()[0].render({ settingEl: renderRoot }, {});
 	}
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests, suggestions, renderRoot,
+		settings, notices, errors, tab, plugin, buttons, indexRequests, configRequests, saveRequests, suggestions, renderRoot,
 		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
 		button: settings.find(setting => setting.name === 'Indexing')?.button,
 		get pickers() {
@@ -209,6 +212,7 @@ test('declarative renderer preserves explicit clear-and-save behavior', async ()
 		assert.deepEqual(ui.saveRequests, [[]]);
 		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
 		assert.deepEqual(ui.indexRequests, [[]]);
+		assert.deepEqual(ui.configRequests, ['custom-config']);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}
@@ -328,6 +332,7 @@ test('blanking a saved path saves only the remaining paths, including an empty l
 		assert.deepEqual(ui.saveRequests, [['b.md']]);
 		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), ['b.md']);
 		assert.deepEqual(ui.indexRequests, [['b.md']]);
+		assert.deepEqual(ui.configRequests, ['custom-config']);
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
 
@@ -340,6 +345,7 @@ test('blanking a saved path saves only the remaining paths, including an empty l
 		assert.deepEqual(ui.saveRequests, [['b.md'], []]);
 		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
 		assert.deepEqual(ui.indexRequests, [['b.md'], []]);
+		assert.deepEqual(ui.configRequests, ['custom-config', 'custom-config']);
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
 	} finally {
@@ -490,7 +496,7 @@ test('successful persistence disables Save before indexing settles', async () =>
 test('settings button indexes the active vault and is re-enabled after success', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-settings-'));
 	try {
-		await mkdir(join(vault, '.obsidian'));
+		await mkdir(join(vault, 'custom-config'));
 		await writeFile(join(vault, 'note.md'), '# Note\n#project/tag\n');
 		const { button, notices, errors, plugin, buttons } = await settingsTab(vault);
 		const save = buttons.find(candidate => candidate.label === 'Save');
@@ -506,7 +512,7 @@ test('settings button indexes the active vault and is re-enabled after success',
 		assert.equal(button.disabled, false);
 		assert.equal(notices.at(-1), 'Index updated: 1 added, 0 updated, 0 removed.');
 		assert.deepEqual(errors, []);
-		const database = await readFile(join(vault, '.obsidian', 'vaultHelper.db'));
+		const database = await readFile(join(vault, 'custom-config', 'vaultHelper.db'));
 		assert.equal(database.subarray(0, 16).toString(), 'SQLite format 3\0');
 		assert.equal(save.disabled, true);
 		assert.equal(save.cta, false);
@@ -525,7 +531,7 @@ test('settings button reports a real indexing error and is re-enabled', async ()
 		assert.equal(button.disabled, false);
 		assert.match(notices.at(-1), /^Indexing failed:/);
 		assert.equal(errors.length, 1);
-		await assert.rejects(readFile(join(vault, '.obsidian', 'vaultHelper.db')), { code: 'ENOENT' });
+		await assert.rejects(readFile(join(vault, 'custom-config', 'vaultHelper.db')), { code: 'ENOENT' });
 	} finally { await rm(vault, { recursive: true, force: true }); }
 });
 

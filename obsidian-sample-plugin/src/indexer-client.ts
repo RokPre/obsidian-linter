@@ -40,14 +40,14 @@ export class IndexerClient {
 		});
 	}
 
-	indexVault(vaultPath: string, ignoredPaths: string[]): Promise<IndexResult> {
+	indexVault(vaultPath: string, ignoredPaths: string[], configDir: string): Promise<IndexResult> {
 		if (this.failure !== undefined) return Promise.reject(this.failure);
 
 		return new Promise((resolve, reject) => {
 			const id = ++this.nextId;
 			this.pending.set(id, { resolve, reject });
 			if (this.pending.size === 1) this.onProgress?.({ phase: 'scanning' });
-			this.worker.postMessage({ id, vaultPath, ignoredPaths });
+			this.worker.postMessage({ id, vaultPath, ignoredPaths, configDir });
 		});
 	}
 

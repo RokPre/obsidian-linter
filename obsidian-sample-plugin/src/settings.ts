@@ -216,7 +216,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 						const adapter = this.app.vault.adapter;
 						if (adapter instanceof FileSystemAdapter) {
 							try {
-								const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths);
+								const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths, this.app.vault.configDir);
 								new Notice(`Index updated: ${result.addedFiles} added, ${result.indexedFiles - result.addedFiles} updated, ${result.deletedFiles} removed.`);
 							} catch (error) {
 								console.error('Vault indexing failed', error);
@@ -241,7 +241,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 						}
 						button.setDisabled(true);
 						try {
-							const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths);
+							const result = await this.plugin.indexerClient.indexVault(adapter.getBasePath(), this.plugin.settings.ignoredPaths, this.app.vault.configDir);
 							new Notice(`Index updated: ${result.addedFiles} added, ${result.indexedFiles - result.addedFiles} updated, ${result.deletedFiles} removed.`);
 						} catch (error) {
 							console.error('Vault indexing failed', error);

@@ -1,4 +1,4 @@
-const YIELD_EXPRESSION = /\(([A-Za-z_$][\w$]*)\+1\)%25===0&&await new Promise\(([A-Za-z_$][\w$]*)=>setTimeout\(\2,0\)\)/g;
+const YIELD_EXPRESSION = /\(([A-Za-z_$][\w$]*)\+1\)%25===0&&await new Promise\(([A-Za-z_$][\w$]*)=>self\.setTimeout\(\2,0\)\)/g;
 
 export function findYieldMatches(source) {
 	return [...source.matchAll(YIELD_EXPRESSION)].map((match) => ({

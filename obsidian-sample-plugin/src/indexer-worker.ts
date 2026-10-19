@@ -3,6 +3,7 @@ import { indexVault, setIgnoredPaths, type IndexProgress } from './indexer';
 interface IndexRequest {
 	id: number;
 	vaultPath: string;
+	configDir: string;
 	databasePath?: string;
 	ignoredPaths: string[];
 }
@@ -10,7 +11,7 @@ interface IndexRequest {
 	self.onmessage = async ({ data: request }: MessageEvent<IndexRequest>) => {
 	try {
 		setIgnoredPaths(request.ignoredPaths);
-		const result = await indexVault(request.vaultPath, request.databasePath, (progress: IndexProgress) => {
+		const result = await indexVault(request.vaultPath, request.configDir, request.databasePath, (progress: IndexProgress) => {
 			self.postMessage({ progress });
 		});
 		self.postMessage({ id: request.id, result });
