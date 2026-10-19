@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsidian';
 import ObsidianLinterPlugin from './main';
 
 export interface ObsidianLinterSettings {
@@ -33,11 +33,9 @@ class IgnoredPathSuggest extends AbstractInputSuggest<string> {
 	}
 }
 type LocalSettingDefinition = {
-	id: string;
 	name: string;
-	description: string;
-	type: 'custom';
-	render: (containerEl: HTMLElement) => void;
+	desc: string;
+	render: (setting: Setting, group: SettingGroup) => void | (() => void);
 };
 
 
@@ -60,11 +58,9 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 
 	getSettingDefinitions(): LocalSettingDefinition[] {
 		return [{
-			id: 'ignoredPaths',
 			name: 'Blacklist for files and folders',
-			description: 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.',
-			type: 'custom',
-			render: (containerEl) => this.renderSettings(containerEl),
+			desc: 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.',
+			render: (setting) => this.renderSettings(setting.settingEl),
 		}];
 	}
 

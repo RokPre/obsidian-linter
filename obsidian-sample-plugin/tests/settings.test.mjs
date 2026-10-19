@@ -141,10 +141,15 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		},
 	};
 	const tab = new module.exports.ObsidianLinterSettingTab({ vault }, plugin);
-	if (renderMode === 'legacy') tab.display();
-	else tab.getSettingDefinitions()[0].render(new Container());
+	let renderRoot;
+	if (renderMode === 'legacy') {
+		tab.display();
+	} else {
+		renderRoot = new Container();
+		tab.getSettingDefinitions()[0].render({ settingEl: renderRoot }, {});
+	}
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests, suggestions,
+		settings, notices, errors, tab, plugin, buttons, indexRequests, saveRequests, suggestions, renderRoot,
 		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
 		button: settings.find(setting => setting.name === 'Indexing')?.button,
 		get pickers() {
@@ -153,7 +158,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		},
 	};
 }
-test('declarative settings define a searchable custom ignored-path editor', async () => {
+test('declarative settings define a searchable ignored-path editor', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-declarative-'));
 	try {
 		await writeFile(join(vault, 'a.md'), '# A\n');
@@ -161,14 +166,13 @@ test('declarative settings define a searchable custom ignored-path editor', asyn
 		const definitions = ui.tab.getSettingDefinitions();
 		assert.equal(definitions.length, 1);
 		const [definition] = definitions;
-		assert.equal(definition.id, 'ignoredPaths');
 		assert.equal(definition.name, 'Blacklist for files and folders');
-		assert.equal(definition.description, 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
-		assert.equal(definition.type, 'custom');
+		assert.equal(definition.desc, 'Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
 		assert.equal(typeof definition.render, 'function');
+		assert.ok(ui.renderRoot.children.length > 0);
 		assert.equal(ui.pickers.length, 1);
 		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault']);
-		assert.equal(ui.descriptions[0], definition.description);
+		assert.equal(ui.descriptions[0], definition.desc);
 		assert.equal(ui.buttons.find(button => button.label === 'Save').disabled, true);
 		assert.deepEqual(ui.saveRequests, []);
 	} finally {
