@@ -900,9 +900,12 @@ export function parse_file(filePath: string, markdown_parser: MarkdownTreeParser
 
 export function insert_file(cursor: Cursor, parsed: ParsedFile, directory_id: number): number {
 	const filePath = parsed.path;
+	const suffix = graph_python_suffix(filePath);
+	const extension = suffix === "." ? "" : suffix.toLowerCase();
+	const name = path.basename(filePath, extension === "" ? "" : suffix);
 	cursor.execute(
 		"INSERT INTO vault_files (directory_id, path, name, inode, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET directory_id = excluded.directory_id, name = excluded.name, inode = excluded.inode, mtime_ns = excluded.mtime_ns, extension = excluded.extension, kind = excluded.kind RETURNING id",
-		[directory_id, filePath, path.basename(filePath, graph_python_suffix(filePath)), parsed.inode, parsed.mtime_ns, graph_python_suffix(filePath).toLowerCase(), parsed.kind],
+		[directory_id, filePath, name, parsed.inode, parsed.mtime_ns, extension, parsed.kind],
 	);
 	const row = cursor.fetchone();
 	if (row === null || row[0] === undefined || row[0] === null) throw new Error("Failed to insert vault file");

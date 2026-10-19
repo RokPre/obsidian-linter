@@ -371,7 +371,7 @@ test('indexes a complete fixture with semantic parity, all table rows, tags, lin
   const noteWithTrailingDot = snapshot.vault_files.rows.find(row => row.path.endsWith('/note.md.'));
   assert.deepEqual(
     [noteWithTrailingDot?.name, noteWithTrailingDot?.extension, noteWithTrailingDot?.kind],
-    ['note.md', '.', 'other'],
+    ['note.md.', '', 'other'],
   );
   const kinds = Object.create(null);
   for (const row of snapshot.vault_files.rows) kinds[row.kind] = true;
