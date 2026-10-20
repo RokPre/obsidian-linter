@@ -240,7 +240,7 @@ export function initialize_database(cursor: Cursor): void {
             link_syntax TEXT NOT NULL CHECK (link_syntax IN ('wikilink', 'link', 'image')),
             is_embed INTEGER NOT NULL CHECK (is_embed IN (0, 1)),
             resolution_status TEXT NOT NULL DEFAULT 'missing' CHECK (
-                resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment')
+                resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored')
             )
         )
         `,
@@ -450,7 +450,7 @@ export function initialize_database(cursor: Cursor): void {
 	if (!linkColumns.has("resolution_status")) {
 		cursor.execute(
 			"ALTER TABLE vault_links ADD COLUMN resolution_status TEXT NOT NULL DEFAULT 'resolved' " +
-			"CHECK (resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment'))",
+			"CHECK (resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored'))",
 		);
 	}
 	for (const column of ["target_heading", "target_block_id"] as const) {
@@ -458,6 +458,46 @@ export function initialize_database(cursor: Cursor): void {
 			cursor.execute(`ALTER TABLE vault_links DROP COLUMN ${column}`);
 		}
 	}
+	const linkSchema = String(
+		cursor.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vault_links'").fetchone()![0]!,
+	);
+	if (!linkSchema.includes("'ignored'") || !linkSchema.includes("'ambiguous_ignored'")) {
+		cursor.execute(`
+            CREATE TABLE vault_links_with_ignored_statuses (
+                id INTEGER PRIMARY KEY,
+                source_file_id INTEGER NOT NULL REFERENCES vault_files(id) ON DELETE CASCADE,
+                source_markdown_node_id INTEGER REFERENCES markdown_nodes(id) ON DELETE CASCADE,
+                source_frontmatter_node_id INTEGER REFERENCES frontmatter_nodes(id) ON DELETE CASCADE,
+                target_file_id INTEGER REFERENCES vault_files(id) ON DELETE SET NULL,
+                target_node_id INTEGER REFERENCES markdown_nodes(id) ON DELETE SET NULL,
+                missing_target_id INTEGER REFERENCES vault_missing_targets(id) ON DELETE SET NULL,
+                raw_target TEXT NOT NULL,
+                display_text TEXT,
+                link_syntax TEXT NOT NULL CHECK (link_syntax IN ('wikilink', 'link', 'image')),
+                is_embed INTEGER NOT NULL CHECK (is_embed IN (0, 1)),
+                resolution_status TEXT NOT NULL DEFAULT 'missing' CHECK (
+                    resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored')
+                )
+            )
+        `);
+		cursor.execute(`
+            INSERT INTO vault_links_with_ignored_statuses
+                (id, source_file_id, source_markdown_node_id, source_frontmatter_node_id,
+                 target_file_id, target_node_id, missing_target_id, raw_target, display_text,
+                 link_syntax, is_embed, resolution_status)
+            SELECT id, source_file_id, source_markdown_node_id, source_frontmatter_node_id,
+                   target_file_id, target_node_id, missing_target_id, raw_target, display_text,
+                   link_syntax, is_embed, resolution_status
+            FROM vault_links
+        `);
+		cursor.execute("DROP TABLE vault_links");
+		cursor.execute("ALTER TABLE vault_links_with_ignored_statuses RENAME TO vault_links");
+	}
+
+
+	cursor.execute(
+		"CREATE INDEX IF NOT EXISTS vault_links_target_source_idx ON vault_links(target_file_id, source_file_id)",
+	);
 
 	cursor.execute(
 		"CREATE INDEX IF NOT EXISTS vault_links_missing_target_idx ON vault_links(missing_target_id, source_file_id)",

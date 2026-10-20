@@ -115,12 +115,111 @@ with sqlite3.connect(p) as c:
     env: { ...process.env, PATH: `${NODE_BIN}:${process.env.PATH || ''}` },
   }));
 }
+function sharedSchemaSnapshot(snapshot) {
+  return {
+    ...snapshot,
+    tables: snapshot.tables.map(([name, sql]) => [
+      name,
+      name === 'vault_links'
+        ? sql.replace(", 'ignored', 'ambiguous_ignored')", ')')
+        : sql,
+    ]),
+  };
+}
 
-test('fresh initializer matches Python schema oracle and exposes the complete contract', async () => {
+function resolutionStatuses(cursor) {
+  const sql = String(rows(cursor, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vault_links'")[0][0]);
+  const check = sql.match(/resolution_status\s+in\s*\(([^)]*)\)/i);
+  assert.ok(check, 'vault_links must constrain resolution_status');
+  return [...check[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+}
+
+
+function addLink(cursor, { id, sourceFileId, sourceNodeId = null, status }) {
+  cursor.execute(
+    `INSERT INTO vault_links
+      (id, source_file_id, source_markdown_node_id, raw_target, link_syntax, is_embed, resolution_status)
+     VALUES (?, ?, ?, ?, 'wikilink', 0, ?)`,
+    [id, sourceFileId, sourceNodeId, `target-${id}`, status],
+  );
+}
+
+function legacyVaultLinks(cursor) {
+  cursor.execute('DROP INDEX vault_links_target_source_idx');
+  cursor.execute('DROP TABLE vault_links');
+  cursor.execute(`
+    CREATE TABLE vault_links (
+      id INTEGER PRIMARY KEY,
+      source_file_id INTEGER NOT NULL REFERENCES vault_files(id) ON DELETE CASCADE,
+      source_markdown_node_id INTEGER REFERENCES markdown_nodes(id) ON DELETE CASCADE,
+      source_frontmatter_node_id INTEGER REFERENCES frontmatter_nodes(id) ON DELETE CASCADE,
+      target_file_id INTEGER REFERENCES vault_files(id) ON DELETE SET NULL,
+      target_node_id INTEGER REFERENCES markdown_nodes(id) ON DELETE SET NULL,
+      missing_target_id INTEGER REFERENCES vault_missing_targets(id) ON DELETE SET NULL,
+      raw_target TEXT NOT NULL,
+      display_text TEXT,
+      link_syntax TEXT NOT NULL CHECK (link_syntax IN ('wikilink', 'link', 'image')),
+      is_embed INTEGER NOT NULL CHECK (is_embed IN (0, 1)),
+      resolution_status TEXT NOT NULL DEFAULT 'missing' CHECK (
+        resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment')
+      )
+    )
+  `);
+}
+
+test('fresh schema accepts plugin-specific statuses and rejects unknown statuses', () => {
+  const { database, cursor } = fresh();
+  addDirectoryAndFile(cursor);
+  addLink(cursor, { id: 1, sourceFileId: 1, status: 'ignored' });
+  addLink(cursor, { id: 2, sourceFileId: 1, status: 'ambiguous_ignored' });
+  assert.deepEqual(rows(cursor, 'SELECT resolution_status FROM vault_links ORDER BY id'), [['ignored'], ['ambiguous_ignored']]);
+  assert.deepEqual(resolutionStatuses(cursor), [
+    'resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored',
+  ]);
+  assertThrowsSql(cursor, `INSERT INTO vault_links (source_file_id, raw_target, link_syntax, is_embed, resolution_status)
+    VALUES (1, 'unknown', 'wikilink', 0, 'unknown')`);
+  database.close();
+});
+
+test('rebuilds legacy link status constraint without losing rows or foreign keys', () => {
+  const { database, cursor } = fresh();
+  addDirectoryAndFile(cursor, { fileId: 1, path: '/vault/source.md' });
+  addDirectoryAndFile(cursor, { fileId: 2, path: '/vault/target.md', directoryPath: '/vault/target' });
+  cursor.execute("INSERT INTO markdown_nodes (id, file_id, ordinal, node_type, attributes_json) VALUES (9, 1, 0, 'paragraph', '{}')");
+  legacyVaultLinks(cursor);
+  addLink(cursor, { id: 3, sourceFileId: 1, sourceNodeId: 9, status: 'resolved' });
+  addLink(cursor, { id: 4, sourceFileId: 1, status: 'missing' });
+  addLink(cursor, { id: 5, sourceFileId: 1, status: 'ambiguous' });
+  addLink(cursor, { id: 6, sourceFileId: 1, status: 'missing_fragment' });
+  addLink(cursor, { id: 7, sourceFileId: 1, status: 'external' });
+  cursor.execute("INSERT INTO markdown_nodes (id, file_id, ordinal, node_type, attributes_json) VALUES (10, 2, 0, 'paragraph', '{}')");
+  cursor.execute("INSERT INTO vault_missing_targets (id, target_type, target) VALUES (8, 'path', 'missing.md')");
+  cursor.execute("UPDATE vault_links SET target_file_id = 2, target_node_id = 10, display_text = 'Target' WHERE id = 3");
+  cursor.execute("UPDATE vault_links SET missing_target_id = 8 WHERE id = 6");
+  const before = rows(cursor, `SELECT id, source_file_id, source_markdown_node_id, source_frontmatter_node_id,
+    target_file_id, target_node_id, missing_target_id, raw_target, display_text, link_syntax, is_embed, resolution_status
+    FROM vault_links ORDER BY id`);
+
+  indexer.initialize_database(cursor);
+
+  assert.deepEqual(rows(cursor, `SELECT id, source_file_id, source_markdown_node_id, source_frontmatter_node_id,
+    target_file_id, target_node_id, missing_target_id, raw_target, display_text, link_syntax, is_embed, resolution_status
+    FROM vault_links ORDER BY id`), before);
+  addLink(cursor, { id: 8, sourceFileId: 1, sourceNodeId: 9, status: 'ignored' });
+  addLink(cursor, { id: 9, sourceFileId: 1, status: 'ambiguous_ignored' });
+  assert.deepEqual(rows(cursor, 'SELECT resolution_status FROM vault_links WHERE id IN (8, 9) ORDER BY id'), [['ignored'], ['ambiguous_ignored']]);
+  assert.deepEqual(rows(cursor, 'PRAGMA foreign_key_check'), []);
+  database.close();
+});
+
+test('fresh initializer matches shared Python schema and exposes the complete contract', async () => {
   const { database, cursor } = fresh();
   const actual = schemaSnapshot(cursor);
   const expected = pythonFreshSnapshot(join(workRoot, 'python-fresh.db'));
-  assert.deepEqual(actual, expected);
+  assert.deepEqual(sharedSchemaSnapshot(actual), expected);
+  assert.deepEqual(resolutionStatuses(cursor), [
+    'resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored',
+  ]);
 
   assert.deepEqual(columns(cursor, 'note_tag_occurrences'), [
     'id', 'tag_id', 'frontmatter_node_id', 'markdown_node_id',
