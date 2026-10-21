@@ -139,7 +139,10 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 				indexRequests.push([...paths]);
 				configRequests.push(configDir);
 				module.exports.setIgnoredPaths(paths);
-				return module.exports.indexVault(vaultPath, configDir);
+				return module.exports.indexVault(vaultPath, configDir, undefined, undefined, async () => ({
+					vaultFiles: [],
+					selections: [],
+				}), []);
 			},
 		},
 	};

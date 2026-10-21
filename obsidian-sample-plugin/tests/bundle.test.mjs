@@ -186,11 +186,13 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 			adapter,
 			configDir,
 			getAllLoadedFiles() { return vaultFiles; },
+			getFiles() { return vaultFiles; },
 			getAbstractFileByPath(relativePath) {
 				return vaultFiles.find((file) => file.path === relativePath) ?? null;
 			},
 			on(event, callback) { registeredVaultEvents.push(event); eventHandlers[event] = callback; return {}; },
 		},
+		metadataCache: { getFirstLinkpathDest() { return null; } },
 		workspace: {
 			onLayoutReady(callback) { layoutReadyCallback = callback; },
 			getActiveViewOfType() { return null; },

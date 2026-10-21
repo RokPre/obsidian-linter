@@ -118,12 +118,17 @@ with sqlite3.connect(p) as c:
 function sharedSchemaSnapshot(snapshot) {
   return {
     ...snapshot,
-    tables: snapshot.tables.map(([name, sql]) => [
-      name,
+    tables: snapshot.tables.map(([name, sql]) => [name,
       name === 'vault_links'
         ? sql.replace(", 'ignored', 'ambiguous_ignored')", ')')
-        : sql,
+        : name === 'vault_index_state'
+          ? sql.replace(', ignored_file_paths_snapshot text', '')
+          : sql,
     ]),
+    tableColumns: Object.fromEntries(Object.entries(snapshot.tableColumns).map(([name, values]) => [
+      name,
+      name === 'vault_index_state' ? values.filter((column) => column !== 'ignored_file_paths_snapshot') : values,
+    ])),
   };
 }
 
@@ -231,7 +236,7 @@ test('fresh initializer matches shared Python schema and exposes the complete co
   ]);
   assert.deepEqual(columns(cursor, 'vault_index_state'), [
     'id', 'derived_data_dirty', 'block_ids_version', 'link_resolution_version',
-    'tag_occurrence_version', 'fenced_code_version', 'callout_version',
+    'tag_occurrence_version', 'fenced_code_version', 'callout_version', 'ignored_file_paths_snapshot',
   ]);
 
   for (const [table, foreignTable] of [
@@ -305,7 +310,7 @@ test('rebuilds legacy provenance occurrences, adds uniqueness indexes, and marks
 test('migrates every missing/old state version and applies the correct invalidation', () => {
   for (const [version, expected, shouldResetMtime, shouldDirty] of [
     ['block_ids_version', 1, true, false],
-    ['link_resolution_version', 4, false, true],
+    ['link_resolution_version', 5, false, true],
     ['tag_occurrence_version', 1, false, true],
     ['fenced_code_version', 1, true, false],
     ['callout_version', 1, true, false],
@@ -325,10 +330,16 @@ test('migrates every missing/old state version and applies the correct invalidat
     cursor.execute(`ALTER TABLE vault_index_state DROP COLUMN ${missing}`);
     indexer.initialize_database(cursor);
     const values = rows(cursor, 'SELECT block_ids_version, link_resolution_version, tag_occurrence_version, fenced_code_version, callout_version FROM vault_index_state')[0];
-    assert.deepEqual(values, [1, 4, 1, 1, 1]);
+    assert.deepEqual(values, [1, 5, 1, 1, 1]);
     assert.ok(rows(cursor, 'SELECT mtime_ns FROM vault_files')[0][0] === 0 || missing === 'link_resolution_version' || missing === 'tag_occurrence_version');
     database.close();
   }
+  const { database, cursor } = fresh();
+  cursor.execute('ALTER TABLE vault_index_state DROP COLUMN ignored_file_paths_snapshot');
+  indexer.initialize_database(cursor);
+  assert.deepEqual(columns(cursor, 'vault_index_state').slice(-1), ['ignored_file_paths_snapshot']);
+  assert.deepEqual(rows(cursor, 'SELECT ignored_file_paths_snapshot FROM vault_index_state'), [[null]]);
+  database.close();
 });
 
 test('copies heading_text into value, adds block_id, and drops obsolete heading indexes', () => {
