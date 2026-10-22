@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -73,9 +74,11 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath, co
 	const failingProgress = [];
 	let client;
 	let failingClient;
+	let workerLoadError;
 	let settled = false;
 	try {
-		client = new IndexerClient(${JSON.stringify(workerPath)}, (update) => progress.push(update));
+		const host = { getFiles: () => [], getFirstLinkpathDest: () => null };
+		client = new IndexerClient(${JSON.stringify(workerPath)}, host, (update) => progress.push(update));
 		const worker = client.worker;
 		const waitForSignal = (type) => new Promise((resolve, reject) => {
 			const onMessage = (event) => {
@@ -129,8 +132,7 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath, co
 		}
 		if (stoppedRequestError !== 'Indexer worker stopped.') throw new Error('request after stop did not reject');
 
-		failingClient = new IndexerClient(${JSON.stringify(missingWorkerPath)}, (update) => failingProgress.push(update));
-		let workerLoadError;
+		failingClient = new IndexerClient(${JSON.stringify(missingWorkerPath)}, host, (update) => failingProgress.push(update));
 		try {
 			await failingClient.indexVault(${JSON.stringify(vaultPath)}, [], ${JSON.stringify(configDir)});
 		} catch (error) {
@@ -146,6 +148,88 @@ function rendererScript(clientPath, workerPath, missingWorkerPath, vaultPath, co
 	}
 })()`;
 }
+
+test('generated renderer script handles worker signals and load failure without leaking globals', async () => {
+	const clients = [];
+	let workerListenerFailure;
+	let rejectWorkerListenerFailure;
+	const workerListenerFailurePromise = new Promise((resolve, reject) => {
+		rejectWorkerListenerFailure = reject;
+	});
+	workerListenerFailurePromise.catch(() => {});
+
+	class FakeIndexerClient {
+		constructor(workerPath, _host, onProgress) {
+			this.worker = {
+				listeners: new Map(),
+				addEventListener: (type, listener) => {
+					const listeners = this.worker.listeners.get(type) ?? new Set();
+					listeners.add(listener);
+					this.worker.listeners.set(type, listeners);
+				},
+				removeEventListener: (type, listener) => this.worker.listeners.get(type)?.delete(listener),
+				emit: (type, data) => {
+					for (const listener of this.worker.listeners.get(type) ?? []) {
+						try {
+							listener(type === 'message' ? { data } : { message: data });
+						} catch (error) {
+							workerListenerFailure = error;
+							rejectWorkerListenerFailure(error);
+						}
+					}
+				},
+			};
+			this.onProgress = onProgress;
+			this.failing = workerPath === '/missing-worker.js';
+			this.requestCount = 0;
+			this.stopped = false;
+			clients.push(this);
+			if (!this.failing) setTimeout(() => this.worker.emit('message', { type: 'armed' }), 0);
+		}
+		indexVault() {
+
+			if (this.stopped) return Promise.reject(new Error('Indexer worker stopped.'));
+			if (this.failing) {
+				this.onProgress(null);
+				return Promise.reject(new Error('simulated worker-load rejection'));
+			}
+
+			if (this.requestCount++ > 0) {
+				return Promise.resolve({ addedFiles: 0, indexedFiles: 0, deletedFiles: 0 });
+			}
+			const gate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+			setTimeout(() => this.worker.emit('message', { type: 'paused', gate }), 0);
+			return new Promise((resolve) => {
+				const pollGate = () => {
+					if (Atomics.load(new Int32Array(gate), 0) === 1) {
+						resolve({ addedFiles: 1, indexedFiles: 1, deletedFiles: 0 });
+					} else {
+						setTimeout(pollGate, 0);
+					}
+				};
+				pollGate();
+			});
+		}
+
+		stop() {
+			this.stopped = true;
+		}
+	}
+
+	const context = { require: () => ({ IndexerClient: FakeIndexerClient }), setTimeout, SharedArrayBuffer, Atomics };
+	const script = rendererScript('/client.js', '/worker.js', '/missing-worker.js', '/vault', '/config');
+	const rendererPromise = runInNewContext(script, context);
+	const outcome = await Promise.race([rendererPromise, workerListenerFailurePromise]);
+	assert.equal(workerListenerFailure, undefined);
+	assert.deepEqual(outcome.result, { addedFiles: 1, indexedFiles: 1, deletedFiles: 0 });
+	assert.deepEqual(outcome.secondResult, { addedFiles: 0, indexedFiles: 0, deletedFiles: 0 });
+	assert.equal(outcome.timerRan, true);
+	assert.equal(outcome.stoppedRequestError, 'Indexer worker stopped.');
+	assert.equal(outcome.workerLoadError, 'simulated worker-load rejection');
+	assert.equal(outcome.failingProgress.at(-1), null);
+	assert.equal(Object.hasOwn(context, 'workerLoadError'), false);
+	assert.equal(clients.length, 2);
+});
 
 const DATABASE_QUERY = String.raw`
 import json, sqlite3, sys

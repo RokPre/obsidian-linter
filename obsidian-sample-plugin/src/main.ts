@@ -27,7 +27,11 @@ export default class ObsidianLinterPlugin extends Plugin {
 			const pluginDirectory = this.manifest.dir ??
 				`${this.app.vault.configDir}/plugins/${this.manifest.id}`;
 			const workerPath = adapter.getFullPath(`${pluginDirectory}/indexer-worker.cjs`);
-			this.indexerClient = new IndexerClient(workerPath, (progress) => {
+			this.indexerClient = new IndexerClient(workerPath, {
+				getFiles: () => this.app.vault.getFiles(),
+				getFirstLinkpathDest: (linkpath, sourcePath) =>
+					this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath),
+			}, (progress) => {
 				if (progress === null) {
 					this.indexerNotice?.hide();
 					this.indexerNotice = undefined;

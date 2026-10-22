@@ -11,9 +11,9 @@ import remarkGfm from "remark-gfm";
 import remarkObsidian from "@quartz-community/remark-obsidian";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
+import { isIgnoredVaultPath } from './ignored-paths';
 
 
-export const IGNORED_DIRECTORY_NAMES: Record<string, true> = { '.git': true, templates: true, excalidraws: true, '.diaryTrash': true };
 let IGNORED_PATHS: string[] = [];
 
 export function setIgnoredPaths(paths: string[]): void {
@@ -101,8 +101,8 @@ export function find_changes(cursor: Cursor, vault_path: string, config_dir: str
 				if (child.isSymbolicLink()) continue;
 				const child_path = path.join(directory, child.name);
 				const vault_relative_path = path.relative(vault_path, child_path).split(path.sep).join('/');
-				if (IGNORED_PATHS.includes(vault_relative_path) || vault_relative_path === config_path) continue;
-				if (child.isDirectory() && IGNORED_DIRECTORY_NAMES[child.name] !== true) scan_directory(child_path);
+				if (isIgnoredVaultPath(vault_relative_path, IGNORED_PATHS, config_path, child.isDirectory())) continue;
+				if (child.isDirectory()) scan_directory(child_path);
 				else if (child.isFile()) {
 					const started = performance.now();
 					const stored_mtime = stored_mtimes.get(child_path);
@@ -240,7 +240,7 @@ export function initialize_database(cursor: Cursor): void {
             link_syntax TEXT NOT NULL CHECK (link_syntax IN ('wikilink', 'link', 'image')),
             is_embed INTEGER NOT NULL CHECK (is_embed IN (0, 1)),
             resolution_status TEXT NOT NULL DEFAULT 'missing' CHECK (
-                resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment')
+                resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored')
             )
         )
         `,
@@ -252,7 +252,8 @@ export function initialize_database(cursor: Cursor): void {
             link_resolution_version INTEGER NOT NULL DEFAULT 0,
             tag_occurrence_version INTEGER NOT NULL DEFAULT 0,
             fenced_code_version INTEGER NOT NULL DEFAULT 0,
-            callout_version INTEGER NOT NULL DEFAULT 0
+            callout_version INTEGER NOT NULL DEFAULT 0,
+            ignored_file_paths_snapshot TEXT
         )
         `,
 		"CREATE INDEX IF NOT EXISTS vault_directories_parent_idx ON vault_directories(parent_id)",
@@ -320,6 +321,16 @@ export function initialize_database(cursor: Cursor): void {
         `);
 	cursor.execute("INSERT OR IGNORE INTO vault_index_state (id, derived_data_dirty) VALUES (1, 0)");
 
+	const initialStateColumns = new Set(
+		cursor
+			.execute("PRAGMA table_info(vault_index_state)")
+			.fetchall()
+			.map((column) => String(column[1]!)),
+	);
+	if (!initialStateColumns.has("ignored_file_paths_snapshot")) {
+		cursor.execute("ALTER TABLE vault_index_state ADD COLUMN ignored_file_paths_snapshot TEXT");
+	}
+
 	const noteColumns = new Set(
 		cursor
 			.execute("PRAGMA table_info(vault_files)")
@@ -351,9 +362,9 @@ export function initialize_database(cursor: Cursor): void {
 	}
 	if (
 		Number(cursor.execute("SELECT link_resolution_version FROM vault_index_state WHERE id = 1").fetchone()![0]!) <
-		4
+		5
 	) {
-		cursor.execute("UPDATE vault_index_state SET link_resolution_version = 4, derived_data_dirty = 1 WHERE id = 1");
+		cursor.execute("UPDATE vault_index_state SET link_resolution_version = 5, derived_data_dirty = 1 WHERE id = 1");
 	}
 
 	if (!stateColumns.has("tag_occurrence_version")) {
@@ -450,7 +461,7 @@ export function initialize_database(cursor: Cursor): void {
 	if (!linkColumns.has("resolution_status")) {
 		cursor.execute(
 			"ALTER TABLE vault_links ADD COLUMN resolution_status TEXT NOT NULL DEFAULT 'resolved' " +
-			"CHECK (resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment'))",
+			"CHECK (resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored'))",
 		);
 	}
 	for (const column of ["target_heading", "target_block_id"] as const) {
@@ -458,6 +469,46 @@ export function initialize_database(cursor: Cursor): void {
 			cursor.execute(`ALTER TABLE vault_links DROP COLUMN ${column}`);
 		}
 	}
+	const linkSchema = String(
+		cursor.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vault_links'").fetchone()![0]!,
+	);
+	if (!linkSchema.includes("'ignored'") || !linkSchema.includes("'ambiguous_ignored'")) {
+		cursor.execute(`
+            CREATE TABLE vault_links_with_ignored_statuses (
+                id INTEGER PRIMARY KEY,
+                source_file_id INTEGER NOT NULL REFERENCES vault_files(id) ON DELETE CASCADE,
+                source_markdown_node_id INTEGER REFERENCES markdown_nodes(id) ON DELETE CASCADE,
+                source_frontmatter_node_id INTEGER REFERENCES frontmatter_nodes(id) ON DELETE CASCADE,
+                target_file_id INTEGER REFERENCES vault_files(id) ON DELETE SET NULL,
+                target_node_id INTEGER REFERENCES markdown_nodes(id) ON DELETE SET NULL,
+                missing_target_id INTEGER REFERENCES vault_missing_targets(id) ON DELETE SET NULL,
+                raw_target TEXT NOT NULL,
+                display_text TEXT,
+                link_syntax TEXT NOT NULL CHECK (link_syntax IN ('wikilink', 'link', 'image')),
+                is_embed INTEGER NOT NULL CHECK (is_embed IN (0, 1)),
+                resolution_status TEXT NOT NULL DEFAULT 'missing' CHECK (
+                    resolution_status IN ('resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored')
+                )
+            )
+        `);
+		cursor.execute(`
+            INSERT INTO vault_links_with_ignored_statuses
+                (id, source_file_id, source_markdown_node_id, source_frontmatter_node_id,
+                 target_file_id, target_node_id, missing_target_id, raw_target, display_text,
+                 link_syntax, is_embed, resolution_status)
+            SELECT id, source_file_id, source_markdown_node_id, source_frontmatter_node_id,
+                   target_file_id, target_node_id, missing_target_id, raw_target, display_text,
+                   link_syntax, is_embed, resolution_status
+            FROM vault_links
+        `);
+		cursor.execute("DROP TABLE vault_links");
+		cursor.execute("ALTER TABLE vault_links_with_ignored_statuses RENAME TO vault_links");
+	}
+
+
+	cursor.execute(
+		"CREATE INDEX IF NOT EXISTS vault_links_target_source_idx ON vault_links(target_file_id, source_file_id)",
+	);
 
 	cursor.execute(
 		"CREATE INDEX IF NOT EXISTS vault_links_missing_target_idx ON vault_links(missing_target_id, source_file_id)",
@@ -1257,48 +1308,77 @@ export function insert_vault_links(cursor: Cursor, source_file_id: number, tree:
 	record_timing("insert_vault_links", started, "file");
 }
 
-export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
+export async function resolve_vault_links(
+	cursor: Cursor,
+	vault_path: string,
+	resolveLinks: ResolveLinkTargets,
+): Promise<void> {
 	const resolved_vault_path = graph_realpath(vault_path);
-	const unique_note_ids = new Map<string, number>();
-	for (const row of cursor.execute(
-		"SELECT name, MIN(id) FROM vault_files GROUP BY name HAVING COUNT(*) = 1",
-	).fetchall()) {
-		unique_note_ids.set(String(row[0]), Number(row[1]));
-	}
-	const unique_filename_ids = new Map<string, number>();
-	for (const row of cursor.execute(
-		"SELECT name || extension, MIN(id) FROM vault_files GROUP BY name, extension HAVING COUNT(*) = 1",
-	).fetchall()) {
-		unique_filename_ids.set(String(row[0]), Number(row[1]));
-	}
-	const name_counts = new Map<string, number>();
-	for (const row of cursor.execute("SELECT name, COUNT(*) FROM vault_files GROUP BY name").fetchall()) {
-		name_counts.set(String(row[0]), Number(row[1]));
-	}
-	const filename_counts = new Map<string, number>();
-	for (const row of cursor.execute(
-		"SELECT name || extension, COUNT(*) FROM vault_files GROUP BY name, extension",
-	).fetchall()) {
-		filename_counts.set(String(row[0]), Number(row[1]));
-	}
 	const indexed_paths = new Map<string, number>();
 	for (const row of cursor.execute("SELECT id, path FROM vault_files").fetchall()) {
-		indexed_paths.set(graph_realpath(String(row[1])), Number(row[0]));
+		const relative_path = graph_relative_path(resolved_vault_path, String(row[1]));
+		if (relative_path !== null) indexed_paths.set(relative_path.split(path.sep).join('/'), Number(row[0]));
 	}
 
-	const resolve_path = (candidate: string): number | null => {
-		const normalized = graph_realpath(candidate);
-		let target_file_id = indexed_paths.get(normalized);
-		if (target_file_id === undefined && graph_python_suffix(normalized) === "") {
-			target_file_id = indexed_paths.get(graph_realpath(graph_with_markdown_suffix(normalized)));
+	const links = cursor.execute(
+		`SELECT vault_links.id, vault_links.source_file_id, vault_links.raw_target,
+		        vault_links.link_syntax, vault_files.path
+		 FROM vault_links
+		 JOIN vault_files ON vault_files.id = vault_links.source_file_id
+		 WHERE vault_links.link_syntax IN ('wikilink', 'link', 'image')`,
+	).fetchall().map((row) => {
+		const raw_target = String(row[2]);
+		const hash = raw_target.indexOf("#");
+		const target_path = (hash < 0 ? raw_target : raw_target.slice(0, hash)).trim();
+		const source_path = String(row[4]);
+		const relative_source_path = graph_relative_path(resolved_vault_path, source_path);
+		if (relative_source_path === null) throw new Error(`Link source is outside vault: ${source_path}`);
+		const source_link_path = relative_source_path.split(path.sep).join('/');
+		const query = target_path && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(target_path)
+			? { linkpath: target_path, sourcePath: source_link_path }
+			: null;
+		return {
+			link_id: Number(row[0]),
+			source_file_id: Number(row[1]),
+			raw_target,
+			target_path,
+			link_syntax: String(row[3]),
+			source_path,
+			source_link_path,
+			separator: hash < 0 ? "" : "#",
+			fragment: (hash < 0 ? "" : raw_target.slice(hash + 1)).trim(),
+			query,
+		};
+	});
+	const queries = links.flatMap((link) => link.query === null ? [] : [link.query]);
+	const resolution = await resolveLinks(queries);
+	const vault_files_by_path = new Map(resolution.vaultFiles.map((file) => [file.path, file]));
+	const selections_by_key = new Map(
+		resolution.selections.map((selection) => [
+			JSON.stringify([selection.linkpath, selection.sourcePath]),
+			selection.targetPath,
+		]),
+	);
+	for (const query of queries) {
+		if (!selections_by_key.has(JSON.stringify([query.linkpath, query.sourcePath]))) {
+			throw new Error(`Obsidian did not return a selection for ${query.linkpath} from ${query.sourcePath}`);
 		}
-		return target_file_id ?? null;
-	};
+	}
 
-	const path_target = (candidate: string): string => {
-		const normalized = graph_realpath(candidate);
-		return graph_relative_path(resolved_vault_path, normalized) ?? normalized;
-	};
+	const names_by_name = new Map<string, VaultFileMetadata[]>();
+	const names_by_filename = new Map<string, VaultFileMetadata[]>();
+	for (const file of resolution.vaultFiles) {
+		const suffix = graph_python_suffix(file.path);
+		const extension = suffix === "." ? "" : suffix.toLowerCase();
+		const name = path.posix.basename(file.path, extension === "" ? "" : suffix);
+		const by_name = names_by_name.get(name) ?? [];
+		by_name.push(file);
+		names_by_name.set(name, by_name);
+		const filename = name + extension;
+		const by_filename = names_by_filename.get(filename) ?? [];
+		by_filename.push(file);
+		names_by_filename.set(filename, by_filename);
+	}
 
 	const get_missing_target_id = (
 		target_type: string,
@@ -1311,9 +1391,7 @@ export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
 			 WHERE target_type = ? AND target = ? AND target_file_id IS ?`,
 			[target_type, target, target_file_id],
 		).fetchone();
-		if (row !== null) {
-			return Number(row[0]);
-		}
+		if (row !== null) return Number(row[0]);
 		cursor.execute(
 			`INSERT INTO vault_missing_targets (target_type, target, target_file_id)
 			 VALUES (?, ?, ?)`,
@@ -1330,19 +1408,17 @@ export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
 			const path_matches = new Map<string, number[]>();
 			const heading_stack: Array<[number, string]> = [];
 			const rows = cursor.execute(
-			`SELECT id, value, attributes_json
-			 FROM markdown_nodes
-			 WHERE file_id = ? AND node_type = 'heading'
-			 ORDER BY start_offset_utf16, id`,
-			[file_id],
+				`SELECT id, value, attributes_json
+				 FROM markdown_nodes
+				 WHERE file_id = ? AND node_type = 'heading'
+				 ORDER BY start_offset_utf16, id`,
+				[file_id],
 			).fetchall();
 			for (const row of rows) {
 				const heading = row[1] as string | null;
 				const attributes = JSON.parse(String(row[2])) as { depth?: number | null };
 				const depth = attributes.depth;
-				if (!heading || depth === undefined || depth === null) {
-					continue;
-				}
+				if (!heading || depth === undefined || depth === null) continue;
 				while (heading_stack.length > 0 && heading_stack[heading_stack.length - 1]![0] >= depth) {
 					heading_stack.pop();
 				}
@@ -1361,9 +1437,7 @@ export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
 		}
 
 		const exact_node_ids = cached[0].get(fragment);
-		if (exact_node_ids !== undefined && exact_node_ids.length > 0) {
-			return exact_node_ids;
-		}
+		if (exact_node_ids !== undefined && exact_node_ids.length > 0) return exact_node_ids;
 		const nested_fragment = fragment.replaceAll("#", "/");
 		return cached[1].get(fragment) ?? cached[1].get(nested_fragment) ?? [];
 	};
@@ -1375,25 +1449,12 @@ export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
 		     missing_target_id = NULL,
 		     resolution_status = 'missing'`,
 	);
-	const links = cursor.execute(
-		`SELECT vault_links.id, vault_links.source_file_id, vault_links.raw_target,
-		        vault_links.link_syntax, vault_files.path
-		 FROM vault_links
-		 JOIN vault_files ON vault_files.id = vault_links.source_file_id
-		 WHERE vault_links.link_syntax IN ('wikilink', 'link', 'image')`,
-	).fetchall();
 
-	for (const row of links) {
-		const link_id = Number(row[0]);
-		const source_file_id = Number(row[1]);
-		const raw_target = String(row[2]);
-		const link_syntax = String(row[3]);
-		const source_path = String(row[4]);
+	for (const link of links) {
 		const started = performance.now();
-		const hash = raw_target.indexOf("#");
-		const target_path = (hash < 0 ? raw_target : raw_target.slice(0, hash)).trim();
-		const separator = hash < 0 ? "" : "#";
-		const fragment = (hash < 0 ? "" : raw_target.slice(hash + 1)).trim();
+		const link_key = link.query === null
+			? null
+			: JSON.stringify([link.query.linkpath, link.query.sourcePath]);
 		let target_file_id: number | null = null;
 		let target_node_id: number | null = null;
 		let missing_id: number | null = null;
@@ -1401,61 +1462,100 @@ export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
 		let target_type: string | null = null;
 		let target_value: string | null = null;
 
-		if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(target_path)) {
+		if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(link.target_path)) {
 			status = "external";
-		} else if (!target_path) {
-			target_file_id = source_file_id;
-		} else if (
-			link_syntax === "wikilink" &&
-			!target_path.startsWith("./") &&
-			!target_path.startsWith("../") &&
-			!target_path.startsWith("/") &&
-			!target_path.startsWith("~") &&
-			!target_path.includes("/")
-		) {
-			target_file_id = unique_note_ids.get(target_path) ?? unique_filename_ids.get(target_path) ?? null;
-			if (target_file_id === null) {
-			const candidate_count = Math.max(name_counts.get(target_path) ?? 0, filename_counts.get(target_path) ?? 0);
-			status = candidate_count > 0 ? "ambiguous" : "missing";
-			if (status === "missing") {
-				target_type = "name";
-				target_value = target_path;
-			}
-			}
+		} else if (!link.target_path) {
+			target_file_id = link.source_file_id;
 		} else {
-			let candidate_path = target_path.startsWith("~")
-				? path.join(os.homedir(), target_path.slice(1))
-				: target_path;
-			if (!path.isAbsolute(candidate_path)) {
-				if (link_syntax === "wikilink" && !target_path.startsWith("./") && !target_path.startsWith("../")) {
-					candidate_path = path.join(resolved_vault_path, candidate_path);
-				} else {
-					candidate_path = path.join(path.dirname(source_path), candidate_path);
-				}
+			const selected_path = selections_by_key.get(link_key!);
+			if (selected_path === undefined) {
+				throw new Error(`Obsidian omitted a selection for ${link.target_path} from ${link.source_link_path}`);
 			}
-			target_file_id = resolve_path(candidate_path);
-			if (target_file_id === null) {
-				target_type = "path";
-				target_value = path_target(
-					graph_python_suffix(candidate_path) ? candidate_path : graph_with_markdown_suffix(candidate_path),
-				);
+			if (selected_path !== null) {
+				const selected_file = vault_files_by_path.get(selected_path);
+				if (selected_file === undefined) {
+					throw new Error(`Obsidian selected a target absent from vault inventory: ${selected_path}`);
+				}
+				if (selected_file.ignored) {
+					status = "ignored";
+				} else {
+					target_file_id = indexed_paths.get(selected_path) ?? null;
+					if (target_file_id === null) {
+						throw new Error(`Obsidian selected an unignored target absent from the index: ${selected_path}`);
+					}
+				}
+			} else {
+				let candidates = new Map<string, VaultFileMetadata>();
+				const bare_wikilink =
+					link.link_syntax === "wikilink" &&
+					!link.target_path.startsWith("./") &&
+					!link.target_path.startsWith("../") &&
+					!link.target_path.startsWith("/") &&
+					!link.target_path.startsWith("~") &&
+					!link.target_path.includes("/");
+				if (bare_wikilink) {
+					for (const file of names_by_name.get(link.target_path) ?? []) candidates.set(file.path, file);
+					for (const file of names_by_filename.get(link.target_path) ?? []) candidates.set(file.path, file);
+					if (candidates.size === 0) {
+						target_type = "name";
+						target_value = link.target_path;
+					}
+				} else {
+					let candidate_path = link.target_path.startsWith("~")
+						? path.join(os.homedir(), link.target_path.slice(1))
+						: link.target_path;
+					if (!path.isAbsolute(candidate_path)) {
+						if (link.link_syntax === "wikilink" && !link.target_path.startsWith("./") && !link.target_path.startsWith("../")) {
+							candidate_path = path.join(resolved_vault_path, candidate_path);
+						} else {
+							candidate_path = path.join(path.dirname(link.source_path), candidate_path);
+						}
+					}
+					const candidate_absolute_path = path.resolve(candidate_path);
+					const candidate_relative_path = graph_relative_path(resolved_vault_path, candidate_absolute_path);
+					if (candidate_relative_path !== null) {
+						const relative_path = candidate_relative_path.split(path.sep).join('/');
+						const candidate_paths = [relative_path];
+						if (graph_python_suffix(relative_path) === "") {
+							candidate_paths.push(graph_with_markdown_suffix(relative_path));
+						}
+						for (const candidate of candidate_paths) {
+							const file = vault_files_by_path.get(candidate);
+							if (file !== undefined) candidates.set(file.path, file);
+						}
+					}
+					if (candidates.size === 0) {
+						target_type = "path";
+						const missing_path = graph_python_suffix(candidate_path)
+							? candidate_path
+							: graph_with_markdown_suffix(candidate_path);
+						const normalized_path = path.resolve(missing_path);
+						target_value = graph_relative_path(resolved_vault_path, normalized_path) ?? normalized_path;
+					}
+				}
+
+				if (candidates.size > 0) {
+					status = [...candidates.values()].some((candidate) => candidate.ignored)
+						? "ambiguous_ignored"
+						: "ambiguous";
+				}
 			}
 		}
 
-		if (target_file_id !== null && separator !== "" && fragment !== "") {
+		if (target_file_id !== null && link.separator !== "" && link.fragment !== "") {
 			let target_nodes: Array<[number]>;
-			if (fragment.startsWith("^")) {
+			if (link.fragment.startsWith("^")) {
 				target_nodes = cursor.execute(
 					"SELECT id FROM markdown_nodes WHERE file_id = ? AND block_id = ?",
-					[target_file_id, fragment.slice(1)],
+					[target_file_id, link.fragment.slice(1)],
 				).fetchall() as Array<[number]>;
 				target_type = "block";
-				target_value = fragment.slice(1);
+				target_value = link.fragment.slice(1);
 			} else {
-				const target_node_ids = get_heading_matches(target_file_id, fragment);
+				const target_node_ids = get_heading_matches(target_file_id, link.fragment);
 				target_nodes = target_node_ids.map((node_id) => [node_id]);
 				target_type = "heading";
-				target_value = fragment;
+				target_value = link.fragment;
 			}
 			if (target_nodes.length === 1) {
 				target_node_id = Number(target_nodes[0]![0]);
@@ -1480,7 +1580,7 @@ export function resolve_vault_links(cursor: Cursor, vault_path: string): void {
 			`UPDATE vault_links
 			 SET target_file_id = ?, target_node_id = ?, missing_target_id = ?, resolution_status = ?
 			 WHERE id = ?`,
-			[target_file_id, target_node_id, missing_id, status, link_id],
+			[target_file_id, target_node_id, missing_id, status, link.link_id],
 		);
 		record_timing("resolve_vault_links", started, "link");
 	}
@@ -1504,25 +1604,63 @@ let sqlite: Promise<SqlJsStatic> | undefined;
 
 
 let active_index: Promise<IndexResult> | undefined;
+let active_index_request: { resolveLinks: ResolveLinkTargets; ignoredFilePaths: string[] } | undefined;
 let index_rerun_pending = false;
 
 export type IndexProgress = { phase: 'scanning' | 'finishing' } | { phase: 'indexing'; completed: number; total: number };
 
+export interface VaultFileMetadata {
+	path: string;
+	ignored: boolean;
+}
+
+export interface LinkTargetQuery {
+	linkpath: string;
+	sourcePath: string;
+}
+
+export interface LinkTargetSelection extends LinkTargetQuery {
+	targetPath: string | null;
+}
+
+export interface LinkResolution {
+	vaultFiles: VaultFileMetadata[];
+	selections: LinkTargetSelection[];
+}
+
+export type ResolveLinkTargets = (queries: LinkTargetQuery[]) => Promise<LinkResolution>;
+
 export function indexVault(
 	vault_path: string,
 	config_dir: string,
-	db_path?: string,
-	onProgress?: (progress: IndexProgress) => void,
+	db_path: string | undefined,
+	onProgress: ((progress: IndexProgress) => void) | undefined,
+	resolveLinks: ResolveLinkTargets,
+	ignoredFilePaths: string[],
 ): Promise<IndexResult> {
 	if (active_index !== undefined) {
+		active_index_request!.resolveLinks = resolveLinks;
+		active_index_request!.ignoredFilePaths = [...ignoredFilePaths].sort();
 		index_rerun_pending = true;
 		return active_index;
 	}
-	const run = run_queued_index(vault_path, config_dir, db_path, onProgress);
+	const request = { resolveLinks, ignoredFilePaths: [...ignoredFilePaths].sort() };
+	const run = run_queued_index(vault_path, config_dir, db_path, onProgress, request);
 	active_index = run;
+	active_index_request = request;
 	void run.then(
-		() => { if (active_index === run) active_index = undefined; },
-		() => { if (active_index === run) active_index = undefined; },
+		() => {
+			if (active_index === run) {
+				active_index = undefined;
+				active_index_request = undefined;
+			}
+		},
+		() => {
+			if (active_index === run) {
+				active_index = undefined;
+				active_index_request = undefined;
+			}
+		},
 	);
 	return run;
 }
@@ -1530,8 +1668,9 @@ export function indexVault(
 async function run_queued_index(
 	vault_path: string,
 	config_dir: string,
-	db_path?: string,
-	onProgress?: (progress: IndexProgress) => void,
+	db_path: string | undefined,
+	onProgress: ((progress: IndexProgress) => void) | undefined,
+	request: { resolveLinks: ResolveLinkTargets; ignoredFilePaths: string[] },
 ): Promise<IndexResult> {
 	let result: IndexResult | undefined;
 	let addedFiles = 0;
@@ -1539,8 +1678,12 @@ async function run_queued_index(
 	let deletedFiles = 0;
 	do {
 		index_rerun_pending = false;
+		const iterationRequest = {
+			resolveLinks: request.resolveLinks,
+			ignoredFilePaths: [...request.ignoredFilePaths],
+		};
 		try {
-			result = await index_vault_once(vault_path, config_dir, db_path, onProgress);
+			result = await index_vault_once(vault_path, config_dir, db_path, onProgress, iterationRequest);
 			addedFiles += result.addedFiles;
 			indexedFiles += result.indexedFiles;
 			deletedFiles += result.deletedFiles;
@@ -1555,8 +1698,9 @@ async function run_queued_index(
 async function index_vault_once(
 	vault_path: string,
 	config_dir: string,
-	db_path?: string,
-	onProgress?: (progress: IndexProgress) => void,
+	db_path: string | undefined,
+	onProgress: ((progress: IndexProgress) => void) | undefined,
+	request: { resolveLinks: ResolveLinkTargets; ignoredFilePaths: string[] },
 ): Promise<IndexResult> {
 	onProgress?.({ phase: 'scanning' });
 	vault_path = path.resolve(vault_path === '~' || vault_path.startsWith('~/') ? path.join(os.homedir(), vault_path.slice(2)) : vault_path);
@@ -1597,7 +1741,10 @@ async function index_vault_once(
 		connection.run('PRAGMA foreign_keys = ON');
 		cursor.execute('BEGIN');
 		initialize_database(cursor);
-		const derived_data_dirty = Boolean(cursor.execute('SELECT derived_data_dirty FROM vault_index_state WHERE id = 1').fetchone()![0]);
+		const stored_inventory = cursor.execute('SELECT ignored_file_paths_snapshot FROM vault_index_state WHERE id = 1').fetchone()![0];
+		const inventory_snapshot = JSON.stringify(request.ignoredFilePaths);
+		const inventory_changed = stored_inventory !== inventory_snapshot;
+		const derived_data_dirty = Boolean(cursor.execute('SELECT derived_data_dirty FROM vault_index_state WHERE id = 1').fetchone()![0]) || inventory_changed;
 		const [changed_directories, changed_files] = find_changes(cursor, vault_path, config_dir);
 		let added_files = 0;
 		for (const [action] of changed_files) {
@@ -1622,7 +1769,7 @@ async function index_vault_once(
 		const file_paths_to_delete = changed_files.filter(([action]) => action === 'deleted').map(([, file]) => file);
 		const directory_paths_to_delete = changed_directories.filter(([action]) => action === 'deleted').map(([, directory]) => directory);
 		const has_file_changes = files_to_index.length > 0 || file_paths_to_delete.length > 0;
-		if (has_file_changes) cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 1 WHERE id = 1');
+		if (has_file_changes || inventory_changed) cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 1 WHERE id = 1');
 
 		for (const directory of directories_to_insert) {
 			const parent_id = directory === vault_path ? null : Number(cursor.execute('SELECT id FROM vault_directories WHERE path = ?', [path.dirname(directory)]).fetchone()![0]);
@@ -1657,7 +1804,7 @@ async function index_vault_once(
 
 		for (const file of file_paths_to_delete) cursor.execute('DELETE FROM vault_files WHERE path = ?', [file]);
 		for (const directory of directory_paths_to_delete) cursor.execute('DELETE FROM vault_directories WHERE path = ?', [directory]);
-		if (has_file_changes) commit();
+		if (has_file_changes || inventory_changed) commit();
 
 		if (has_file_changes || derived_data_dirty) {
 			const tag_file_ids = derived_data_dirty ? cursor.execute('SELECT id FROM vault_files').fetchall().map(([id]) => Number(id)) : indexed_file_ids;
@@ -1668,9 +1815,9 @@ async function index_vault_once(
 			insert_note_tags(cursor, tag_file_ids);
 			console.debug('Inserted note tags');
 			console.debug('Resolving wikilinks ...');
-			resolve_vault_links(cursor, vault_path);
+			await resolve_vault_links(cursor, vault_path, request.resolveLinks);
 			console.debug('Resolved wikilinks');
-			cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 0 WHERE id = 1');
+			cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 0, ignored_file_paths_snapshot = ? WHERE id = 1', [inventory_snapshot]);
 		}
 		commit();
 		print_timing_summary();
