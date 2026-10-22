@@ -384,6 +384,9 @@ test('returns vault-relative indexed files and matches only eligible indexed Not
       ruleId: 'markdown-notes',
       files: [{ path: 'notes/A.md', kind: 'markdown' }],
     }]);
+    const defaultDatabase = join(vault, '.obsidian', 'vaultHelper.db');
+    await indexVault(vault, defaultDatabase);
+    assert.deepEqual(await indexer.getIndexedFilesForVault(vault, '.obsidian'), files);
   } finally {
     setIgnoredPaths([]);
   }

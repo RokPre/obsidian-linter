@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -11,13 +11,34 @@ import { build } from 'esbuild';
 
 const require = createRequire(import.meta.url);
 
-async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
+const rulesConfigBuild = await build({
+	entryPoints: [fileURLToPath(new URL('../src/rules-config.ts', import.meta.url))],
+	bundle: true, write: false, platform: 'node', format: 'cjs',
+});
+const rulesConfigModule = { exports: {} };
+vm.runInNewContext(rulesConfigBuild.outputFiles[0].text, {
+	module: rulesConfigModule,
+	exports: rulesConfigModule.exports,
+});
+const realRulesConfig = rulesConfigModule.exports;
+
+async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', rulesOptions = {}) {
 	const settings = [];
 	const buttons = [];
 	const notices = [];
 	const errors = [];
+	const indexRequests = [];
+	const configRequests = [];
 	const saveRequests = [];
+	const savedSettings = [];
 	const suggestions = [];
+	const vaultReads = [];
+	const indexedFileRequests = [];
+	const parseRequests = [];
+	const matchRequests = [];
+	class TFile {
+		constructor(path) { this.path = path; }
+	}
 	class FileSystemAdapter {
 		constructor(basePath) { this.basePath = basePath; }
 		getBasePath() { return this.basePath; }
@@ -32,6 +53,9 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 			this.selectCallback = callback;
 			return this;
 		}
+		setValue(value) { this.inputEl.value = value; }
+		selectSuggestion(value) { return this.selectCallback?.(value); }
+		close() {}
 	}
 	class Container {
 		constructor() { this.children = []; }
@@ -100,13 +124,25 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		}
 	}
 	class Notice { constructor(message) { notices.push(message); } }
+	const rulesConfig = {
+		parseRulesConfig(source) {
+			parseRequests.push(source);
+			return realRulesConfig.parseRulesConfig(source);
+		},
+		matchRulesToFiles(config, files) {
+			const matches = realRulesConfig.matchRulesToFiles(config, files);
+			matchRequests.push({ config, files, matches });
+			return matches;
+		},
+	};
 	const compiled = await build({
 		stdin: {
-			contents: "export { ObsidianLinterSettingTab } from './src/settings'; export { indexVault, setIgnoredPaths } from './src/indexer';",
+			contents: "export { ObsidianLinterSettingTab, DEFAULT_SETTINGS } from './src/settings'; export { indexVault, setIgnoredPaths } from './src/indexer';",
 			resolveDir: fileURLToPath(new URL('..', import.meta.url)),
 			loader: 'ts',
 		},
-		bundle: true, write: false, platform: 'node', format: 'cjs', external: ['obsidian'],
+		bundle: true, write: false, platform: 'node', format: 'cjs',
+		external: ['obsidian', './rules-config'],
 		loader: { '.wasm': 'binary' },
 	});
 	const module = { exports: {} };
@@ -114,7 +150,11 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		module, exports: module.exports, process, performance, TextDecoder, Buffer, setTimeout,
 		__dirname: fileURLToPath(new URL('..', import.meta.url)),
 		console: { ...console, debug() {}, error(...args) { errors.push(args); } },
-		require(name) { return name === 'obsidian' ? { AbstractInputSuggest, FileSystemAdapter, PluginSettingTab, Setting, Notice } : require(name); },
+		require(name) {
+			if (name === 'obsidian') return { AbstractInputSuggest, FileSystemAdapter, TFile, PluginSettingTab, Setting, Notice };
+			if (name.endsWith('rules-config')) return rulesConfig;
+			return require(name);
+		},
 	});
 	const vaultAdapter = typeof adapter === 'string' ? new FileSystemAdapter(adapter) : adapter;
 	const vault = {
@@ -126,15 +166,36 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 				.map(path => ({ path: path.split(sep).join('/') }));
 		},
 		getAbstractFileByPath(path) {
-			return this.getAllLoadedFiles().find(file => file.path === path) ?? null;
+			if (typeof adapter !== 'string') return null;
+			try {
+				return statSync(join(adapter, path)).isFile() ? new TFile(path) : null;
+			} catch {
+				return null;
+			}
+		},
+		async read(file) {
+			const vaultPath = typeof adapter === 'string' ? adapter : adapter?.getBasePath?.() ?? '';
+			vaultReads.push({ vaultPath, path: file.path });
+			if (typeof adapter !== 'string') throw new Error('Vault file is not readable');
+			return readFile(join(adapter, file.path), 'utf8');
 		},
 	};
-	const indexRequests = [];
-	const configRequests = [];
 	const plugin = {
-		settings: { ignoredPaths: [...ignoredPaths] },
-		async saveSettings(settings) { saveRequests.push([...settings.ignoredPaths]); },
+		settings: {
+			...module.exports.DEFAULT_SETTINGS,
+			ignoredPaths: [...ignoredPaths],
+			rulesFilePath: rulesOptions.rulesFilePath ?? module.exports.DEFAULT_SETTINGS.rulesFilePath ?? '',
+		},
+		async saveSettings(settings) {
+			saveRequests.push([...settings.ignoredPaths]);
+			savedSettings.push({ ...settings, ignoredPaths: [...settings.ignoredPaths] });
+			Object.assign(this.settings, settings);
+		},
 		indexerClient: {
+			getIndexedFiles(vaultPath, configDir) {
+				indexedFileRequests.push([vaultPath, configDir]);
+				return Promise.resolve(rulesOptions.indexedFiles ?? []);
+			},
 			indexVault(vaultPath, paths, configDir) {
 				indexRequests.push([...paths]);
 				configRequests.push(configDir);
@@ -155,13 +216,18 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy') {
 		tab.getSettingDefinitions()[0].render({ settingEl: renderRoot }, {});
 	}
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests, configRequests, saveRequests, suggestions, renderRoot,
-		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
+		settings, notices, errors, tab, plugin, buttons, indexRequests, configRequests, saveRequests, savedSettings,
+		suggestions, renderRoot, vaultReads, indexedFileRequests, parseRequests, matchRequests,
+		defaults: module.exports.DEFAULT_SETTINGS,
+		rulesSetting: settings.find(setting => setting.name === 'Rules JSON file'),
+		rulesInput: settings.find(setting => setting.name === 'Rules JSON file')?.text,
+		readValidateButton: settings.find(setting => setting.name === 'Rules JSON file')?.button,
 		button: settings.find(setting => setting.name === 'Indexing')?.button,
 		get pickers() {
 			return settings.filter(setting =>
 				setting.name === 'Ignored path' && setting.parent.children.includes(setting));
 		},
+		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
 	};
 }
 test('declarative settings define a searchable ignored-path editor', async () => {
@@ -177,7 +243,7 @@ test('declarative settings define a searchable ignored-path editor', async () =>
 		assert.equal(typeof definition.render, 'function');
 		assert.ok(ui.renderRoot.children.length > 0);
 		assert.equal(ui.pickers.length, 1);
-		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault']);
+		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault', 'Read/Validate']);
 		assert.equal(ui.descriptions[0], definition.desc);
 		assert.equal(ui.buttons.find(button => button.label === 'Save').disabled, true);
 		assert.deepEqual(ui.saveRequests, []);
@@ -724,6 +790,212 @@ test('suggestions use loaded paths, exclude root and duplicate draft paths, and 
 
 		ui.suggestions[1].selectCallback(suggestions[1]);
 		assert.deepEqual(Array.from(ui.tab.draftIgnoredPaths), ['already.md', 'folder/beta.md']);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('rules path defaults empty, persists, reloads, and uses loaded-vault suggestions', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-setting-'));
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		await writeFile(join(vault, 'settings', 'rules.json'), '{"version":1,"rules":[]}');
+		const ui = await settingsTab(vault);
+		assert.equal(ui.defaults.rulesFilePath, '');
+		assert.equal(ui.rulesInput?.inputEl.value, '');
+		assert.equal(ui.rulesSetting?.button.label, 'Read/Validate');
+
+		const suggestion = ui.suggestions.at(-1);
+		assert.deepEqual(suggestion.getSuggestions('settings/rules'), ['settings/rules.json']);
+		suggestion.selectSuggestion('settings/rules.json', {});
+		assert.equal(ui.rulesInput.inputEl.value, 'settings/rules.json');
+		assert.equal(ui.plugin.settings.rulesFilePath, 'settings/rules.json');
+		assert.equal(ui.savedSettings.at(-1).rulesFilePath, 'settings/rules.json');
+		assert.deepEqual(Array.from(ui.plugin.settings.ignoredPaths), []);
+		assert.deepEqual(ui.vaultReads, []);
+
+		const reloaded = await settingsTab(vault, [], 'legacy', {
+			rulesFilePath: ui.savedSettings.at(-1).rulesFilePath,
+		});
+		assert.equal(reloaded.rulesInput.inputEl.value, 'settings/rules.json');
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Read/Validate manually matches only the current indexed-file projection', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-read-'));
+	const rulesFilePath = 'settings/rules.json';
+	const rulesSource = JSON.stringify({
+		version: 1,
+		rules: [{
+			id: 'filename-case',
+			check: 'filenameCase',
+			enabled: true,
+			severity: 'warning',
+			scope: { fileKinds: ['markdown'], include: ['notes/*.md'] },
+			options: { case: 'camelCase' },
+		}],
+	});
+	const indexedFiles = [{ path: 'notes/camelNote.md', kind: 'markdown' }];
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		await mkdir(join(vault, 'notes'), { recursive: true });
+		await writeFile(join(vault, rulesFilePath), rulesSource);
+		await writeFile(join(vault, 'notes', 'camelNote.md'), '# Indexed\n');
+		await writeFile(join(vault, 'notes', 'notIndexed.md'), '# In vault only\n');
+		const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath, indexedFiles });
+		assert.deepEqual(ui.vaultReads, []);
+		assert.deepEqual(ui.parseRequests, []);
+		assert.deepEqual(ui.matchRequests, []);
+
+		await ui.readValidateButton.click();
+
+		assert.deepEqual(ui.vaultReads, [{ vaultPath: vault, path: rulesFilePath }]);
+		assert.deepEqual(ui.parseRequests, [rulesSource]);
+		assert.deepEqual(ui.indexedFileRequests, [[vault, 'custom-config']]);
+		assert.deepEqual(ui.indexRequests, [], 'Read/Validate must not start a reindex');
+		assert.deepEqual(JSON.parse(JSON.stringify(ui.matchRequests[0].files)), indexedFiles);
+		assert.deepEqual(JSON.parse(JSON.stringify(ui.matchRequests[0].matches)), [{
+			ruleId: 'filename-case',
+			files: indexedFiles,
+		}]);
+		assert.equal(JSON.stringify(ui.matchRequests[0].matches).includes('notIndexed.md'), false);
+		assert.equal(ui.notices.length, 1, 'the only user-facing result is the validity Notice');
+		assert.match(ui.notices[0], /valid/i);
+		assert.equal(ui.notices[0].includes('camelNote.md'), false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+test('Read/Validate disables while matching is pending and re-enables after success or error', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-button-state-'));
+	const rulesFilePath = 'settings/rules.json';
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		await writeFile(join(vault, rulesFilePath), '{"version":1,"rules":[]}');
+		const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath });
+		let resolveIndexedFiles;
+		const indexedFilesPending = new Promise(resolve => { resolveIndexedFiles = resolve; });
+		ui.plugin.indexerClient.getIndexedFiles = (vaultPath, configDir) => {
+			ui.indexedFileRequests.push([vaultPath, configDir]);
+			return indexedFilesPending;
+		};
+
+		const validation = ui.readValidateButton.click();
+		assert.equal(ui.readValidateButton.disabled, true);
+		resolveIndexedFiles([]);
+		await validation;
+		assert.equal(ui.readValidateButton.disabled, false);
+		assert.match(ui.notices.at(-1), /valid/i);
+
+		ui.plugin.indexerClient.getIndexedFiles = (vaultPath, configDir) => {
+			ui.indexedFileRequests.push([vaultPath, configDir]);
+			return Promise.reject(new Error('index read failed'));
+		};
+		const failedValidation = ui.readValidateButton.click();
+		assert.equal(ui.readValidateButton.disabled, true);
+		await failedValidation;
+		assert.equal(ui.readValidateButton.disabled, false);
+		assert.match(ui.notices.at(-1), /settings\/rules\.json.*index read failed/i);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('the same relative rules path is read from the active vault', async () => {
+	const root = await mkdtemp(join(tmpdir(), 'vault-helper-rules-active-'));
+	const vaultA = join(root, 'vault-a');
+	const vaultB = join(root, 'vault-b');
+	const rulesFilePath = 'settings/rules.json';
+	const validRules = JSON.stringify({
+		version: 1,
+		rules: [{
+			id: 'vault-a',
+			check: 'filenameCase',
+			enabled: true,
+			severity: 'warning',
+			scope: { fileKinds: ['markdown'], include: ['**/*.md'] },
+			options: { case: 'camelCase' },
+		}],
+	});
+	try {
+		for (const vault of [vaultA, vaultB]) await mkdir(join(vault, 'settings'), { recursive: true });
+		await writeFile(join(vaultA, rulesFilePath), validRules);
+		await writeFile(join(vaultB, rulesFilePath), '{"version":2,"rules":[]}');
+		const uiA = await settingsTab(vaultA, [], 'legacy', { rulesFilePath });
+		const uiB = await settingsTab(vaultB, [], 'legacy', { rulesFilePath });
+
+		await uiA.readValidateButton.click();
+		await uiB.readValidateButton.click();
+
+		assert.deepEqual(uiA.vaultReads, [{ vaultPath: vaultA, path: rulesFilePath }]);
+		assert.deepEqual(uiB.vaultReads, [{ vaultPath: vaultB, path: rulesFilePath }]);
+		assert.match(uiA.notices[0], /valid/i);
+		assert.match(uiB.notices[0], new RegExp(`${rulesFilePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*version`, 'i'));
+		assert.deepEqual(uiA.indexedFileRequests, [[vaultA, 'custom-config']]);
+		assert.deepEqual(uiB.indexedFileRequests, [], 'invalid active-vault configuration is rejected before matching');
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test('read failures include the rules path and do not parse or match', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-read-error-'));
+	const rulesFilePath = 'settings/rules.json';
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		await writeFile(join(vault, rulesFilePath), '{}');
+		const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath });
+		ui.tab.app.vault.read = async (file) => {
+			ui.vaultReads.push({ vaultPath: vault, path: file.path });
+			throw new Error('vault read unavailable');
+		};
+
+		await ui.readValidateButton.click();
+
+		assert.match(ui.notices[0], /settings\/rules\.json.*vault read unavailable/i);
+		assert.deepEqual(ui.parseRequests, []);
+		assert.deepEqual(ui.indexedFileRequests, []);
+		assert.deepEqual(ui.matchRequests, []);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('parse and schema failures include the rules path and stop before matching', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-invalid-'));
+	const rulesFilePath = 'settings/rules.json';
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		for (const [source, diagnostic] of [
+			['{not-json', /json|unexpected/i],
+			['{"version":2,"rules":[]}', /version/i],
+		]) {
+			await writeFile(join(vault, rulesFilePath), source);
+			const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath });
+			await ui.readValidateButton.click();
+			assert.match(ui.notices[0], /settings\/rules\.json/i);
+			assert.match(ui.notices[0], diagnostic);
+			assert.equal(ui.parseRequests.length, 1);
+			assert.deepEqual(ui.indexedFileRequests, []);
+			assert.deepEqual(ui.matchRequests, []);
+		}
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('an empty rules path reports that it is unconfigured without attempting a read', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-empty-'));
+	try {
+		const ui = await settingsTab(vault);
+		await ui.readValidateButton.click();
+		assert.match(ui.notices[0], /path.*not configured/i);
+		assert.deepEqual(ui.vaultReads, []);
+		assert.deepEqual(ui.parseRequests, []);
+		assert.deepEqual(ui.indexedFileRequests, []);
+		assert.deepEqual(ui.matchRequests, []);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}

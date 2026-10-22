@@ -33,6 +33,9 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 	const path = require('node:path');
 	const vaultPath = ${JSON.stringify(vaultPath)};
 	const configDir = ${JSON.stringify(configDir)};
+	const rulesFilePath = 'settings/rules.json';
+	const rulesSource = '{"version":1,"rules":[]}';
+	let rulesFileReads = 0;
 	const originalLoad = Module._load;
 	const settings = [];
 	const vaultFiles = Array.from({ length: 26 }, (_, index) => ({
@@ -62,10 +65,13 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 		getBasePath() { return this.basePath; }
 		getFullPath(relativePath) { return path.join(this.basePath, ...relativePath.split('/')); }
 	}
+	class TFile {
+		constructor(path) { this.path = path; }
+	}
 
 	class Plugin {
 		constructor(app, manifest) { this.app = app; this.manifest = manifest; }
-		async loadData() { return undefined; }
+		async loadData() { return { rulesFilePath }; }
 		async saveData() {}
 		registerEvent(event) { return event; }
 		registerDomEvent() {}
@@ -188,7 +194,12 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 			getAllLoadedFiles() { return vaultFiles; },
 			getFiles() { return vaultFiles; },
 			getAbstractFileByPath(relativePath) {
+				if (relativePath === rulesFilePath) return new TFile(relativePath);
 				return vaultFiles.find((file) => file.path === relativePath) ?? null;
+			},
+			async read() {
+				rulesFileReads++;
+				return rulesSource;
 			},
 			on(event, callback) { registeredVaultEvents.push(event); eventHandlers[event] = callback; return {}; },
 		},
@@ -198,7 +209,7 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 			getActiveViewOfType() { return null; },
 		},
 	};
-	const obsidian = { App, AbstractInputSuggest, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting };
+	const obsidian = { App, AbstractInputSuggest, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile };
 	Module._load = function(request, parent, isMain) {
 		if (request === 'obsidian') return obsidian;
 		return originalLoad.call(this, request, parent, isMain);
@@ -361,6 +372,11 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 		await savePromise;
 		if (indexRequests.length !== 10) throw new Error('Save did not trigger an indexing request');
 		const saveResult = await indexRequests[9];
+		const rulesFileModify = eventHandlers.modify({ path: rulesFilePath });
+		if (indexRequests.length !== 11) throw new Error('rules-file modify event did not trigger an indexing request');
+		await rulesFileModify;
+		const rulesFileModifyResult = await indexRequests[10];
+		if (rulesFileReads !== 0) throw new Error('startup, settings display, or file events read the rules file');
 
 		const root = settingTab.containerEl;
 		const buttons = [...root.querySelectorAll('button')].map((button) => button.textContent);
@@ -395,6 +411,9 @@ function rendererScript(bundlePath, vaultPath, configDir) {
 			progressNoticeCleared: progressNotices.every((notice) => !notice.noticeEl.isConnected),
 			manualResult,
 			manualButtonDisabled,
+			rulesFileReadCount: rulesFileReads,
+			rulesFileModifyRequestCount: 1,
+			rulesFileModifyResult,
 			notices,
 			registeredVaultEvents,
 		};
@@ -488,13 +507,23 @@ app.whenReady().then(async () => {
 		assert.equal(payload.ok, true, payload.error || 'renderer test failed');
 		assert.equal(payload.value.layoutReadyRegistered, true);
 		assert.equal(payload.value.blacklistRendered, true);
-		assert.equal(payload.value.pickerCount, 1);
+		assert.equal(payload.value.pickerCount, 2);
 		assert.ok(payload.value.buttons.includes('Add'));
 		assert.ok(payload.value.buttons.includes('Clear'));
 		assert.ok(payload.value.buttons.includes('Save'));
 		assert.ok(payload.value.buttons.includes('Index vault'));
 		assert.equal(payload.value.removeTooltip, 'Remove from blacklist');
 		assert.ok(payload.value.settingNames.includes('Blacklist for files and folders'));
+		assert.ok(payload.value.buttons.includes('Read/Validate'));
+		assert.ok(payload.value.settingNames.includes('Rules JSON file'));
+		assert.equal(payload.value.rulesFileReadCount, 0);
+		assert.equal(payload.value.rulesFileModifyRequestCount, 1);
+		assert.deepEqual(payload.value.rulesFileModifyResult, {
+			databasePath: join(vaultPath, configDir, 'vaultHelper.db'),
+			addedFiles: 0,
+			indexedFiles: 0,
+			deletedFiles: 0,
+		});
 		assert.equal(payload.value.startupRequestCount, 1);
 		assert.equal(payload.value.deleteRequestCount, 1);
 		assert.equal(payload.value.createRequestCount, 2);

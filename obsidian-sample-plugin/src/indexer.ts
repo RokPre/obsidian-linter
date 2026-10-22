@@ -1613,8 +1613,7 @@ function resolve_vault_path(vault_path: string): string {
 	return fs.realpathSync(resolved_path);
 }
 
-export async function getIndexedFiles(databasePath: string, vaultPath: string): Promise<IndexedFile[]> {
-	const root = resolve_vault_path(vaultPath);
+async function readIndexedFiles(databasePath: string, root: string): Promise<IndexedFile[]> {
 	const SQL = await (sqlite ??= initSqlJs({ wasmBinary: sqliteBinary.buffer }));
 	const connection = new SQL.Database(fs.readFileSync(databasePath));
 	const cursor = new Cursor(connection);
@@ -1633,6 +1632,16 @@ export async function getIndexedFiles(databasePath: string, vaultPath: string): 
 		cursor.release();
 		connection.close();
 	}
+}
+
+export async function getIndexedFiles(databasePath: string, vaultPath: string): Promise<IndexedFile[]> {
+	return readIndexedFiles(databasePath, resolve_vault_path(vaultPath));
+}
+
+export async function getIndexedFilesForVault(vaultPath: string, configDir: string): Promise<IndexedFile[]> {
+	const root = resolve_vault_path(vaultPath);
+	const databasePath = path.resolve(path.join(root, configDir, 'vaultHelper.db'));
+	return readIndexedFiles(databasePath, root);
 }
 
 
