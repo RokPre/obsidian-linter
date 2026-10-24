@@ -27,6 +27,8 @@ const TABLES = [
 ];
 
 let indexer;
+let rulesConfig;
+let rulesConfigBundlePath;
 let testIgnoredPaths = [];
 const TEST_IGNORED_DIRECTORY_NAMES = new Set(['.git', 'templates', 'excalidraws', '.diaryTrash']);
 
@@ -146,11 +148,22 @@ before(async () => {
     logLevel: 'silent',
   });
   indexer = await import(`${pathToFileURL(bundlePath).href}?test=${Date.now()}`);
+  rulesConfigBundlePath = join(PLUGIN_DIR, `.rules-config-test-${process.pid}.mjs`);
+  await build({
+    entryPoints: [join(PLUGIN_DIR, 'src', 'rules-config.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    outfile: rulesConfigBundlePath,
+    logLevel: 'silent',
+  });
+  rulesConfig = await import(`${pathToFileURL(rulesConfigBundlePath).href}?test=${Date.now()}`);
   assert.equal(typeof indexer.indexVault, 'function', 'indexer.ts must export indexVault');
 });
 
 after(async () => {
   if (bundlePath) await rm(bundlePath, { force: true });
+  if (rulesConfigBundlePath) await rm(rulesConfigBundlePath, { force: true });
   if (workRoot) await rm(workRoot, { recursive: true, force: true });
   if (savedSelf === undefined) delete globalThis.self;
   else globalThis.self = savedSelf;
@@ -331,6 +344,53 @@ async function makeVault(name, files) {
   }
   return vault;
 }
+
+
+test('returns vault-relative indexed files and matches only eligible indexed Notes', async () => {
+  const vault = await makeVault('indexed-file-projection', {
+    'drawing.excalidraw.md': '{}',
+    'image.png': 'image',
+    'notes/A.md': '# A\n',
+    'notes/B.pdf': 'pdf',
+    'script.js': 'export {};\n',
+    'unknown.bin': 'binary',
+    'ignored/hidden.md': '# Not indexed\n',
+  });
+  const database = join(workRoot, 'indexed-file-projection.db');
+  setIgnoredPaths(['ignored']);
+  try {
+    const result = await indexVault(vault, database);
+    const files = await indexer.getIndexedFiles(result.databasePath, vault);
+    assert.deepEqual(files, [
+      { path: 'drawing.excalidraw.md', kind: 'excalidraw' },
+      { path: 'image.png', kind: 'image' },
+      { path: 'notes/A.md', kind: 'markdown' },
+      { path: 'notes/B.pdf', kind: 'pdf' },
+      { path: 'script.js', kind: 'script' },
+      { path: 'unknown.bin', kind: 'other' },
+    ]);
+    const config = rulesConfig.parseRulesConfig(JSON.stringify({
+      version: 1,
+      rules: [{
+        id: 'markdown-notes',
+        check: 'requiredFrontmatterProperty',
+        enabled: true,
+        severity: 'warning',
+        scope: { fileKinds: ['markdown'], include: ['**/*.md'] },
+        options: { properties: ['aliases'], caseSensitive: true },
+      }],
+    }));
+    assert.deepEqual(rulesConfig.matchRulesToFiles(config, files), [{
+      ruleId: 'markdown-notes',
+      files: [{ path: 'notes/A.md', kind: 'markdown' }],
+    }]);
+    const defaultDatabase = join(vault, '.obsidian', 'vaultHelper.db');
+    await indexVault(vault, defaultDatabase);
+    assert.deepEqual(await indexer.getIndexedFilesForVault(vault, '.obsidian'), files);
+  } finally {
+    setIgnoredPaths([]);
+  }
+});
 
 test('marks a pre-index ignored target as ignored without storing its contents', async () => {
   const secret = 'ignored-target-secret-content';

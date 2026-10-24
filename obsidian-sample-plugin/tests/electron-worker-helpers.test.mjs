@@ -207,6 +207,141 @@ test('bridges batched Obsidian link selections and metadata inventory to the wor
 	assert.deepEqual(JSON.parse(JSON.stringify(progress)), [{ phase: 'scanning' }, { phase: 'scanning' }, null]);
 	client.stop();
 });
+
+test('routes indexed-file projection requests through the client and worker', async () => {
+	const projection = [{ path: 'notes/One.md', kind: 'markdown' }];
+	const indexerCalls = [];
+	const workerMessages = [];
+	let clientWorker;
+	const indexerMock = {
+		async getIndexedFilesForVault(vaultPath, configDir) {
+			indexerCalls.push([vaultPath, configDir]);
+			return projection;
+		},
+	};
+	const workerSelf = {
+		onmessage: null,
+		postMessage(data) {
+			workerMessages.push(JSON.parse(JSON.stringify(data)));
+			clientWorker.emit('message', { data });
+		},
+	};
+	const handlerModule = { exports: {} };
+	vm.runInNewContext(requestHandlerSource, {
+		module: handlerModule,
+		exports: handlerModule.exports,
+		require(name) {
+			if (name === './indexer') return indexerMock;
+			throw new Error(`Unexpected worker dependency: ${name}`);
+		},
+		self: workerSelf,
+	});
+
+	class TestWorker {
+		constructor() {
+			this.listeners = new Map();
+			this.messages = [];
+			clientWorker = this;
+		}
+		addEventListener(type, listener) {
+			const listeners = this.listeners.get(type) ?? [];
+			listeners.push(listener);
+			this.listeners.set(type, listeners);
+		}
+		postMessage(data) {
+			this.messages.push(JSON.parse(JSON.stringify(data)));
+			void workerSelf.onmessage({ data });
+		}
+		emit(type, event) {
+			for (const listener of this.listeners.get(type) ?? []) listener(event);
+		}
+		terminate() {}
+	}
+	const clientModule = { exports: {} };
+	vm.runInNewContext(clientSource, {
+		module: clientModule,
+		exports: clientModule.exports,
+		Worker: TestWorker,
+		Blob: class {},
+		URL: { createObjectURL() { return 'blob:test-worker'; }, revokeObjectURL() {} },
+	});
+	const client = new clientModule.exports.IndexerClient('worker.cjs', {
+		getFiles() { throw new Error('projection requests must not enumerate vault files'); },
+		getFirstLinkpathDest() { return null; },
+	});
+	try {
+		const files = await client.getIndexedFiles('/active/vault', '.obsidian');
+		assert.deepEqual(JSON.parse(JSON.stringify(files)), projection);
+		assert.deepEqual(clientWorker.messages, [{
+			id: 1,
+			type: 'get-indexed-files',
+			vaultPath: '/active/vault',
+			configDir: '.obsidian',
+		}]);
+		assert.deepEqual(workerMessages, [{
+			id: 1,
+			type: 'indexed-files-result',
+			files: projection,
+		}]);
+		assert.deepEqual(indexerCalls, [['/active/vault', '.obsidian']]);
+	} finally {
+		client.stop();
+	}
+});
+test('indexed-file reads do not clear active indexing progress', async () => {
+	const listeners = new Map();
+	const messages = [];
+	class TestWorker {
+		addEventListener(type, listener) {
+			listeners.set(type, listener);
+		}
+		postMessage(message) {
+			messages.push(message);
+		}
+		terminate() {}
+		emit(reply) {
+			listeners.get('message')({ data: reply });
+		}
+	}
+	const clientModule = { exports: {} };
+	vm.runInNewContext(clientSource, {
+		module: clientModule,
+		exports: clientModule.exports,
+		Worker: TestWorker,
+		Blob: class {},
+		URL: { createObjectURL() { return 'blob:test-worker'; }, revokeObjectURL() {} },
+	});
+	const progress = [];
+	const client = new clientModule.exports.IndexerClient('worker.cjs', {
+		getFiles() { return []; },
+		getFirstLinkpathDest() { return null; },
+	}, (value) => progress.push(value));
+	try {
+		const indexPromise = client.indexVault('/vault', [], '.obsidian');
+		const filesPromise = client.getIndexedFiles('/vault', '.obsidian');
+		const indexedFiles = [{ path: 'note.md', kind: 'note' }];
+		client.worker.emit({ progress: { phase: 'indexing', completed: 1, total: 1 } });
+		client.worker.emit({ id: 2, type: 'indexed-files-result', files: indexedFiles });
+		assert.deepEqual(JSON.parse(JSON.stringify(progress)), [
+			{ phase: 'scanning' },
+			{ phase: 'indexing', completed: 1, total: 1 },
+		]);
+		client.worker.emit({
+			id: 1,
+			result: { databasePath: '/vault/.obsidian/vaultHelper.db', addedFiles: 0, indexedFiles: 1, deletedFiles: 0 },
+		});
+		const [indexResult, files] = await Promise.all([indexPromise, filesPromise]);
+		assert.equal(indexResult.indexedFiles, 1);
+		assert.deepEqual(JSON.parse(JSON.stringify(files)), indexedFiles);
+		assert.deepEqual(JSON.parse(JSON.stringify(progress.at(-1))), null);
+		assert.deepEqual(JSON.parse(JSON.stringify(messages)), [
+			{ id: 1, vaultPath: '/vault', ignoredPaths: [], ignoredFilePaths: [], configDir: '.obsidian' },
+			{ id: 2, type: 'get-indexed-files', vaultPath: '/vault', configDir: '.obsidian' },
+		]);
+	} finally {
+		client.stop();
+	}
+});
 test('coalesces an ignore request through the real client, worker, indexer, and SQLite database', async () => {
 	await assertRealRouteCoalescing({
 		databaseName: 'coalesced-client-ignore.db',
@@ -324,8 +459,10 @@ async function assertRealRouteCoalescing({
 		Blob: class {},
 		URL: { createObjectURL() { return 'blob:test-worker'; }, revokeObjectURL() {} },
 	});
+	let hostFileEnumerations = 0;
 	const host = {
 		getFiles() {
+			hostFileEnumerations++;
 			return readdirSync(vaultPath, { withFileTypes: true })
 				.filter(entry => entry.isFile())
 				.map(entry => ({ path: relative(vaultPath, join(vaultPath, entry.name)).split('\\').join('/') }));
@@ -350,6 +487,22 @@ async function assertRealRouteCoalescing({
 		const results = await Promise.all([first, second]);
 		assert.equal(results.length, 2, 'both client requests must settle');
 		assert(results.every(result => result.databasePath === databasePath));
+		const hostFileEnumerationsBeforeProjection = hostFileEnumerations;
+		const indexedFiles = await client.getIndexedFiles(vaultPath, '.obsidian');
+		const expectedIndexedFiles = [{ path: 'A.md', kind: 'markdown' }];
+		if (expectTarget) expectedIndexedFiles.push({ path: 'B.md', kind: 'markdown' });
+		assert.deepEqual(JSON.parse(JSON.stringify(indexedFiles)), expectedIndexedFiles);
+		assert.equal(hostFileEnumerations, hostFileEnumerationsBeforeProjection,
+			'projection lookup must query the index without enumerating vault files');
+		assert.deepEqual(JSON.parse(JSON.stringify(requestMessages.find(message => message.type === 'get-indexed-files'))), {
+			id: 3,
+			type: 'get-indexed-files',
+			vaultPath,
+			configDir: '.obsidian',
+		});
+		assert(workerMessages.some(({ id, type, files }) =>
+			id === 3 && type === 'indexed-files-result' &&
+			JSON.stringify(files) === JSON.stringify(expectedIndexedFiles)));
 
 		const snapshot = JSON.parse(execFileSync(process.env.PYTHON || '/usr/bin/python3', ['-c', String.raw`
 import json, sqlite3, sys

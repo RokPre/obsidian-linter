@@ -12,6 +12,7 @@ import remarkObsidian from "@quartz-community/remark-obsidian";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { isIgnoredVaultPath } from './ignored-paths';
+import type { IndexedFile } from './rules-config';
 
 
 let IGNORED_PATHS: string[] = [];
@@ -1602,6 +1603,47 @@ export interface IndexResult {
 
 let sqlite: Promise<SqlJsStatic> | undefined;
 
+function resolve_vault_path(vault_path: string): string {
+	const expanded_path = vault_path === '~' || vault_path.startsWith('~/')
+		? path.join(os.homedir(), vault_path.slice(2))
+		: vault_path;
+	const resolved_path = path.resolve(expanded_path);
+	if (!fs.existsSync(resolved_path)) throw new Error(`Path does not exist: ${resolved_path}`);
+	if (!fs.statSync(resolved_path).isDirectory()) throw new Error(`Path is not a directory: ${resolved_path}`);
+	return fs.realpathSync(resolved_path);
+}
+
+async function readIndexedFiles(databasePath: string, root: string): Promise<IndexedFile[]> {
+	const SQL = await (sqlite ??= initSqlJs({ wasmBinary: sqliteBinary.buffer }));
+	const connection = new SQL.Database(fs.readFileSync(databasePath));
+	const cursor = new Cursor(connection);
+	try {
+		return cursor.execute('SELECT path, kind FROM vault_files ORDER BY path').fetchall().map(([filePath, kind]) => {
+			if (typeof filePath !== 'string' || typeof kind !== 'string') {
+				throw new Error('Indexed file path or kind is not a string');
+			}
+			const relativePath = path.relative(root, filePath);
+			if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+				throw new Error(`Indexed file is outside the vault: ${filePath}`);
+			}
+			return { path: relativePath.split(path.sep).join('/'), kind: kind as IndexedFile['kind'] };
+		});
+	} finally {
+		cursor.release();
+		connection.close();
+	}
+}
+
+export async function getIndexedFiles(databasePath: string, vaultPath: string): Promise<IndexedFile[]> {
+	return readIndexedFiles(databasePath, resolve_vault_path(vaultPath));
+}
+
+export async function getIndexedFilesForVault(vaultPath: string, configDir: string): Promise<IndexedFile[]> {
+	const root = resolve_vault_path(vaultPath);
+	const databasePath = path.resolve(path.join(root, configDir, 'vaultHelper.db'));
+	return readIndexedFiles(databasePath, root);
+}
+
 
 let active_index: Promise<IndexResult> | undefined;
 let active_index_request: { resolveLinks: ResolveLinkTargets; ignoredFilePaths: string[] } | undefined;
@@ -1703,10 +1745,7 @@ async function index_vault_once(
 	request: { resolveLinks: ResolveLinkTargets; ignoredFilePaths: string[] },
 ): Promise<IndexResult> {
 	onProgress?.({ phase: 'scanning' });
-	vault_path = path.resolve(vault_path === '~' || vault_path.startsWith('~/') ? path.join(os.homedir(), vault_path.slice(2)) : vault_path);
-	if (!fs.existsSync(vault_path)) throw new Error(`Path does not exist: ${vault_path}`);
-	if (!fs.statSync(vault_path).isDirectory()) throw new Error(`Path is not a directory: ${vault_path}`);
-	vault_path = fs.realpathSync(vault_path);
+	vault_path = resolve_vault_path(vault_path);
 	db_path = db_path ?? path.join(vault_path, config_dir, 'vaultHelper.db');
 	db_path = path.resolve(db_path === '~' || db_path.startsWith('~/') ? path.join(os.homedir(), db_path.slice(2)) : db_path);
 	const SQL = await (sqlite ??= initSqlJs({ wasmBinary: sqliteBinary.buffer }));

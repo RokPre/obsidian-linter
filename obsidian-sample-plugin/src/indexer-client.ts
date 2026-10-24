@@ -5,6 +5,7 @@ import type {
 	LinkTargetQuery,
 	LinkTargetSelection,
 } from './indexer';
+import type { IndexedFile } from './rules-config';
 import { isIgnoredVaultPath } from './ignored-paths';
 
 interface ObsidianIndexHost {
@@ -16,21 +17,32 @@ type IndexReply =
 	| { id: number; result: IndexResult }
 	| { id: number; error: string }
 	| { id: number; type: 'resolve-links'; queries: LinkTargetQuery[] }
+	| { id: number; type: 'indexed-files-result'; files: IndexedFile[] }
 	| { progress: IndexProgress };
 
 interface PendingIndex {
+	kind: 'index';
 	resolve: (result: IndexResult) => void;
 	reject: (error: Error) => void;
 	ignoredPaths: string[];
 	configDir: string;
 }
 
+interface PendingIndexedFiles {
+	kind: 'files';
+	resolve: (files: IndexedFile[]) => void;
+	reject: (error: Error) => void;
+}
+
+type PendingRequest = PendingIndex | PendingIndexedFiles;
+
 export class IndexerClient {
 	private worker: Worker;
 	private workerUrl: string;
 	private nextId = 0;
 	private failure: Error | undefined;
-	private pending = new Map<number, PendingIndex>();
+	private pending = new Map<number, PendingRequest>();
+	private pendingIndexCount = 0;
 
 	constructor(
 		workerPath: string,
@@ -45,21 +57,30 @@ export class IndexerClient {
 		this.worker.addEventListener('message', (event: MessageEvent<IndexReply>) => {
 			const reply = event.data;
 			if ('progress' in reply) {
-				if (this.pending.size > 0) this.onProgress?.(reply.progress);
+				if (this.pendingIndexCount > 0) this.onProgress?.(reply.progress);
 				return;
 			}
 
 			const request = this.pending.get(reply.id);
 			if (request === undefined) return;
 			if ('type' in reply && reply.type === 'resolve-links') {
-				this.resolveLinks(reply.id, request, reply.queries);
+				if (request.kind === 'index') this.resolveLinks(reply.id, request, reply.queries);
+				else {
+					this.pending.delete(reply.id);
+					request.reject(new Error('Unexpected link-resolution request for indexed files.'));
+				}
 				return;
 			}
 
 			this.pending.delete(reply.id);
 			if ('error' in reply) request.reject(new Error(reply.error));
-			else if ('result' in reply) request.resolve(reply.result);
-			if (this.pending.size === 0) this.onProgress?.(null);
+			else if ('result' in reply && request.kind === 'index') request.resolve(reply.result);
+			else if ('files' in reply && request.kind === 'files') request.resolve(reply.files);
+			else request.reject(new Error('Unexpected indexer worker response.'));
+			if (request.kind === 'index') {
+				this.pendingIndexCount--;
+				if (this.pendingIndexCount === 0) this.onProgress?.(null);
+			}
 		});
 		this.worker.addEventListener('error', (event) => {
 			this.rejectPending(new Error(event.message));
@@ -75,10 +96,22 @@ export class IndexerClient {
 				.filter((path) => isIgnoredVaultPath(path, ignoredPaths, configDir))
 				.sort();
 			const id = ++this.nextId;
-			const request = { resolve, reject, ignoredPaths: [...ignoredPaths], configDir };
+			const request: PendingIndex = { kind: 'index', resolve, reject, ignoredPaths: [...ignoredPaths], configDir };
 			this.pending.set(id, request);
-			if (this.pending.size === 1) this.onProgress?.({ phase: 'scanning' });
+			const firstIndexRequest = this.pendingIndexCount === 0;
+			this.pendingIndexCount++;
+			if (firstIndexRequest) this.onProgress?.({ phase: 'scanning' });
 			this.worker.postMessage({ id, vaultPath, ignoredPaths: request.ignoredPaths, ignoredFilePaths, configDir });
+		});
+	}
+
+	getIndexedFiles(vaultPath: string, configDir: string): Promise<IndexedFile[]> {
+		if (this.failure !== undefined) return Promise.reject(this.failure);
+
+		return new Promise((resolve, reject) => {
+			const id = ++this.nextId;
+			this.pending.set(id, { kind: 'files', resolve, reject });
+			this.worker.postMessage({ id, type: 'get-indexed-files', vaultPath, configDir });
 		});
 	}
 
@@ -117,6 +150,7 @@ export class IndexerClient {
 		this.failure = error;
 		for (const request of this.pending.values()) request.reject(error);
 		this.pending.clear();
+		this.pendingIndexCount = 0;
 		this.onProgress?.(null);
 	}
 }

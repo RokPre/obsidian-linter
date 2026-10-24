@@ -1,4 +1,5 @@
 import {
+	getIndexedFilesForVault,
 	indexVault,
 	setIgnoredPaths,
 	type IndexProgress,
@@ -16,7 +17,15 @@ interface IndexRequest {
 	ignoredFilePaths: string[];
 }
 
+interface IndexedFilesRequest {
+	id: number;
+	type: 'get-indexed-files';
+	vaultPath: string;
+	configDir: string;
+}
+
 type WorkerMessage = IndexRequest
+	| IndexedFilesRequest
 	| { id: number; type: 'resolve-links-result'; resolution: LinkResolution }
 	| { id: number; type: 'resolve-links-error'; error: string };
 
@@ -27,6 +36,10 @@ const pendingResolutions = new Map<number, {
 
 self.onmessage = ({ data: message }: MessageEvent<WorkerMessage>) => {
 	if ('type' in message) {
+		if (message.type === 'get-indexed-files') {
+			void runGetIndexedFilesRequest(message);
+			return;
+		}
 		const pending = pendingResolutions.get(message.id);
 		if (pending === undefined) return;
 		pendingResolutions.delete(message.id);
@@ -58,6 +71,18 @@ async function runIndexRequest(request: IndexRequest): Promise<void> {
 			request.ignoredFilePaths,
 		);
 		self.postMessage({ id: request.id, result });
+	} catch (error) {
+		self.postMessage({
+			id: request.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+async function runGetIndexedFilesRequest(request: IndexedFilesRequest): Promise<void> {
+	try {
+		const files = await getIndexedFilesForVault(request.vaultPath, request.configDir);
+		self.postMessage({ id: request.id, type: 'indexed-files-result', files });
 	} catch (error) {
 		self.postMessage({
 			id: request.id,

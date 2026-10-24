@@ -1,12 +1,15 @@
-import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting, SettingGroup } from 'obsidian';
+import { AbstractInputSuggest, App, ButtonComponent, ExtraButtonComponent, FileSystemAdapter, Notice, PluginSettingTab, Setting, SettingGroup, TFile } from 'obsidian';
 import ObsidianLinterPlugin from './main';
+import { matchRulesToFiles, parseRulesConfig } from './rules-config';
 
 export interface ObsidianLinterSettings {
 	ignoredPaths: string[];
+	rulesFilePath: string;
 }
 
 export const DEFAULT_SETTINGS: ObsidianLinterSettings = {
 	ignoredPaths: [],
+	rulesFilePath: '',
 };
 
 class IgnoredPathSuggest extends AbstractInputSuggest<string> {
@@ -246,6 +249,58 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 						} catch (error) {
 							console.error('Vault indexing failed', error);
 							new Notice(`Indexing failed: ${error instanceof Error ? error.message : String(error)}`);
+						} finally {
+							button.setDisabled(false);
+						}
+					}),
+			);
+
+		const saveRulesFilePath = async (rulesFilePath: string) => {
+			this.plugin.settings.rulesFilePath = rulesFilePath;
+			try {
+				await this.plugin.saveSettings({ ...this.plugin.settings });
+			} catch (error) {
+				console.error('Rules path settings save failed', error);
+				new Notice(`Settings could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		};
+		new Setting(containerEl)
+			.setName('Rules JSON file')
+			.setDesc('Path to the JSON rules file relative to the vault root.')
+			.addText((text) => {
+				text.setPlaceholder('Choose rules JSON file');
+				text.setValue(this.plugin.settings.rulesFilePath);
+				text.onChange((value) => saveRulesFilePath(value));
+				new IgnoredPathSuggest(this.app, text.inputEl, () => false)
+					.onSelect((value) => saveRulesFilePath(value));
+			})
+			.addButton((button) =>
+				button
+					.setButtonText('Read/Validate')
+					.onClick(async () => {
+						const rulesFilePath = this.plugin.settings.rulesFilePath;
+						if (rulesFilePath === '') {
+							new Notice('Rules file path is not configured.');
+							return;
+						}
+						button.setDisabled(true);
+						try {
+							const file = this.app.vault.getAbstractFileByPath(rulesFilePath);
+							if (!(file instanceof TFile)) throw new Error('File not found in the active vault.');
+							const source = await this.app.vault.read(file);
+							const config = parseRulesConfig(source);
+							const adapter = this.app.vault.adapter;
+							if (!(adapter instanceof FileSystemAdapter)) {
+								throw new Error('Matching rules to indexed files requires Obsidian desktop.');
+							}
+							const indexedFiles = await this.plugin.indexerClient.getIndexedFiles(
+								adapter.getBasePath(),
+								this.app.vault.configDir,
+							);
+							matchRulesToFiles(config, indexedFiles);
+							new Notice('Rules file is valid.');
+						} catch (error) {
+							new Notice(`${rulesFilePath}: ${error instanceof Error ? error.message : String(error)}`);
 						} finally {
 							button.setDisabled(false);
 						}
