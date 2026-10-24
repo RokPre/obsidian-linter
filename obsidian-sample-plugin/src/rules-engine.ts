@@ -5,7 +5,7 @@ export type IndexedFrontmatter =
 	| { status: 'valid'; rootProperties: string[] }
 	| { status: 'malformed'; message?: string; line?: number };
 
-export type IndexedLinkStatus = 'resolved' | 'external' | 'missing' | 'missing_fragment' | 'ambiguous';
+export type IndexedLinkStatus = 'resolved' | 'external' | 'missing' | 'missing_fragment' | 'ambiguous' | 'ignored' | 'ambiguous_ignored';
 
 export interface IndexedLinkOccurrence {
 	rawTarget: string;
