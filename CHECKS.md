@@ -1,10 +1,10 @@
 # Linter checks and JSON rules
 
-This document specifies the first configurable linter checks planned for the Obsidian plugin. The JSON rule reader, execution engine, and diagnostics sidebar are not implemented yet. The existing Python health checker contains related checks, but it does not read this configuration.
+This document describes the version 1 JSON rule format and intended check behavior for the Obsidian plugin. The current plugin reads a configured file only after the user clicks **Read/Validate**, validates the complete configuration, and matches each rule scope against indexed files. It does not execute checks or produce lint findings yet. The existing Python health checker contains related checks, but it does not read this configuration.
 
-A **check** is an implemented capability, such as testing whether a frontmatter property exists. A **rule** is one configured use of a check: which files to inspect, which options to use, and how to report violations. Multiple rules can use the same check with different scopes and options.
+A **check** names a validation, and a **rule** configures one use of a check: which files it applies to, which options it uses, and how a future result would be reported. The current reader validates rules and computes scope matches; check execution and findings are planned.
 
-[rules.example.json](rules.example.json) contains a complete, single-rule configuration for initial reader and engine development.
+The root [rules.example.json](rules.example.json) contains a complete, single-rule configuration accepted by the current reader. For setup, see the [JSON rules guide](docs/json-rules.md).
 
 ## Configuration format
 
@@ -25,7 +25,8 @@ A configuration is a UTF-8 JSON file with this structure:
         "exclude": []
       },
       "options": {
-        "property": "aliases"
+        "properties": ["aliases"],
+        "caseSensitive": true
       }
     }
   ]
@@ -34,20 +35,20 @@ A configuration is a UTF-8 JSON file with this structure:
 
 ### Required keys and allowed values
 
-All keys listed below are required. There are no implicit defaults in version 1. JSON comments and trailing commas are not allowed.
+All top-level fields shown below are required; `scope.exclude` is optional. There are no implicit defaults for required fields in version 1. JSON comments and trailing commas are not allowed.
 
 | Key | Type | Accepted value or meaning |
 | --- | --- | --- |
 | `version` | Integer | Exactly `1`; other versions are unsupported. |
-| `rules` | Array of rule objects | Zero or more rules. An empty array runs no checks. |
+| `rules` | Array of rule objects | Zero or more rules. An empty array contains no configured rules. |
 | `rules[].id` | String | Non-empty, not whitespace-only, and unique within the configuration. Identifies the configured rule, not a database row. |
 | `rules[].check` | String | Exactly `requiredFrontmatterProperty`, `filenameCase`, or `unresolvedInternalLinks`. Names are case-sensitive. |
-| `rules[].enabled` | Boolean | `true` executes the rule; `false` disables it without removing it. |
-| `rules[].severity` | String | Exactly `info`, `warning`, or `error`. Controls diagnostic severity, not check behavior. |
-| `rules[].scope` | Object | Contains `fileKinds`, `include`, and `exclude`, as defined below. |
+| `rules[].enabled` | Boolean | Required and validated. Scope matching currently includes every rule, including disabled rules; checks are not executed yet. |
+| `rules[].severity` | String | Exactly `info`, `warning`, or `error`. Validated for future diagnostic reporting; it does not affect current matching. |
+| `rules[].scope` | Object | Contains `fileKinds` and `include`, plus optional `exclude`, as defined below. |
 | `rules[].options` | Object | Contains exactly the options documented for the selected check. |
 
-The future reader must reject missing keys, unknown keys, unknown check names, incorrect types, unsupported values, and duplicate rule IDs. This includes validation of disabled rules. Invalid configuration must prevent execution and produce a configuration error; it must not be silently treated as an empty or successful health check.
+The current reader rejects missing or unknown keys, unknown check names, incorrect types, unsupported values, invalid patterns, and duplicate rule IDs. It validates disabled rules too and rejects the complete configuration before returning any scope matches if any part is invalid.
 
 ### File and folder scope
 
@@ -55,9 +56,9 @@ Version 1 scopes select files. A folder pattern selects its descendant files; it
 
 | Scope key | Type | Accepted value or meaning |
 | --- | --- | --- |
-| `fileKinds` | Array of strings | Exactly `["markdown"]` for these initial checks. Other file kinds are not supported in version 1. |
-| `include` | Array of pattern strings | At least one pattern. A file must match at least one to be selected. |
-| `exclude` | Array of pattern strings | Zero or more patterns. Matching any exclusion removes the file, even if an inclusion matches. |
+| `fileKinds` | Array of strings | Known indexed kinds: `markdown`, `excalidraw`, `pdf`, `image`, `script`, `video`, `recording`, and `other`. An empty array selects no files. `filenameCase` accepts any indexed kind; the other checks accept only `markdown`. |
+| `include` | Array of pattern strings | Required and non-empty. A file must match at least one pattern to be selected. |
+| `exclude` | Array of pattern strings | Optional; when present, zero or more patterns. Matching any exclusion removes the file, even if an inclusion matches. |
 
 Patterns match the entire vault-relative file path, including its extension. Use `/` separators on every platform. Matching is case-sensitive, including extensions. Patterns also match hidden path components; there is no additional hidden-file exclusion at the rule layer.
 
@@ -88,16 +89,20 @@ This selects indexed Markdown files below `knowledge`, including nested folders,
 
 **Index exclusions and rule exclusions are different.** Rule scope cannot select files omitted by the indexer. Excluding a source file from one rule does not remove it from the index or make it invisible to other checks.
 
-### Execution and reporting
+### Planned execution and reporting (not implemented)
 
-- Enabled rules run independently and contribute diagnostics to the same health-check result. Rule order must not change their meaning; version 1 has no execution edges, dependencies, branches, or automatic fixes.
+The following describes intended behavior for a future execution engine. The current **Read/Validate** action does not run checks or create or display diagnostics.
+
+- When implemented, enabled rules will run independently and contribute diagnostics to the same health-check result. Rule order will not change their meaning; version 1 has no execution edges, dependencies, branches, or automatic fixes.
 - Reusing a check with different rule IDs creates separate configured rules. Their findings remain attributed to their respective rule IDs, even if they concern the same file.
-- Checks operate on a completed index whose required derived data is ready. An indexing or execution failure must be reported separately from lint violations and must not appear as a clean result.
-- Each diagnostic identifies the rule ID, check name, severity, vault-relative file path, and a human-readable message. A source line is included when available and meaningful. Lines are one-based; a file-level finding may have no line.
+- Checks will operate on a completed index whose required derived data is ready. An indexing or execution failure must be reported separately from lint violations and must not appear as a clean result.
+- Each diagnostic will identify the rule ID, check name, severity, vault-relative file path, and a human-readable message. A source line will be included when available and meaningful. Lines are one-based; a file-level finding may have no line.
 - Missing fields, parsing failures, and unsupported data must not be converted into fabricated source locations. For malformed frontmatter, report the parsing problem and skip checks that depend on interpreting its properties.
-- JSON is the canonical execution configuration. A future node editor must edit the same rule semantics. Node positions and other visual layout data are not part of this version 1 format.
+- JSON will be the canonical execution configuration. A future node editor must edit the same rule semantics. Node positions and other visual layout data are not part of this version 1 format.
 
 ## 1. Required frontmatter property
+
+The check descriptions below specify intended execution behavior; the current reader validates options and computes scope matches only.
 
 **Check name:** `requiredFrontmatterProperty`
 
@@ -110,15 +115,16 @@ For each selected Markdown note, test whether the configured property is present
 - A note without frontmatter is missing the property.
 - Presence is sufficient: `aliases: null`, `aliases: []`, and `aliases: ""` all satisfy this check. It does not validate the value's type or require a non-empty value.
 - Nested properties do not satisfy a top-level requirement. `metadata: {aliases: []}` does not supply a top-level `aliases` property.
-- Property names are case-sensitive and matched exactly. `Aliases` does not satisfy `aliases`.
-- Malformed frontmatter is a parsing problem, not evidence that the property is absent. Skip this property check for that note and report the parsing problem separately.
+- Property-name comparison is controlled by the required `caseSensitive` option.
+- Malformed frontmatter is a parsing problem, not evidence that a property is absent. Skip this property check for that note and report the parsing problem separately.
 - There are no built-in exceptions for folders such as `people` or `diary`; exclusions belong in the rule's scope.
 
 ### Options
 
 | Key | Type | Accepted value |
 | --- | --- | --- |
-| `property` | String | Required. A non-empty, non-whitespace-only top-level property name, such as `aliases`, `tags`, or `related`. The value is not trimmed or interpreted as a nested property path. |
+| `properties` | Array of strings | Required. Every listed name is a required top-level property; values are not trimmed or interpreted as nested property paths. |
+| `caseSensitive` | Boolean | Required. Controls whether property-name matching is case-sensitive. |
 
 ### Rule JSON
 
@@ -136,7 +142,8 @@ This is a rule object to place inside the configuration's `rules` array:
     "exclude": ["knowledge/templates/**"]
   },
   "options": {
-    "property": "aliases"
+    "properties": ["aliases"],
+    "caseSensitive": true
   }
 }
 ```
@@ -153,26 +160,22 @@ For `knowledge/cameraModel.md` without this property, the message is `Required f
 
 Validate the file's stem: remove only the final extension and inspect the remaining filename. Do not validate folder names or change any files.
 
-Version 1 supports only `camelCase`, using the existing check's predicate `^[a-z][a-zA-Z0-9]*$`: the first character must be an ASCII lowercase letter; subsequent characters must be ASCII letters or digits.
+Version 1 supports four filename conventions. The selected convention applies to the stem after removing only the final extension; folders and extensions are not checked.
 
-| Filename | Result | Reason |
+| Convention | Rule | Valid stems |
 | --- | --- | --- |
-| `cameraModel.md` | Pass | Lowercase initial letter, followed by letters. |
-| `note2.md` | Pass | Digits are allowed after the initial letter. |
-| `myHTTP2.md` | Pass | Consecutive uppercase letters are allowed by this predicate. |
-| `CameraModel.md` | Finding | Initial letter is uppercase. |
-| `camera_model.md` | Finding | Underscores are not allowed. |
-| `camera.model.md` | Finding | The stem contains a dot. |
-| `2notes.md` | Finding | Initial character is a digit. |
+| `camelCase` | Starts with an ASCII lowercase letter, followed by ASCII letters or digits. | `cameraModel`, `note2`, `myHTTP2` |
+| `PascalCase` | Starts with an ASCII uppercase letter, followed by ASCII letters or digits. Acronym runs are allowed. | `CameraModel`, `XMLParser2` |
+| `snake_case` | Starts with a lowercase ASCII letter; lowercase ASCII alphanumeric parts are separated by single underscores. | `camera_model`, `camera2_model` |
+| `kebab-case` | Starts with a lowercase ASCII letter; lowercase ASCII alphanumeric parts are separated by single hyphens. | `camera-model`, `camera2-model` |
 
-This predicate does not infer word boundaries or enforce acronym capitalization. There are no built-in filename exceptions; exclude files such as `README.md` explicitly if needed.
+There are no built-in filename exceptions; exclude files such as `README.md` explicitly if needed.
 
 ### Options
 
 | Key | Type | Accepted value |
 | --- | --- | --- |
-| `case` | String | Required. Exactly `camelCase` in version 1. Other naming conventions are unsupported. |
-
+| `case` | String | Required. Exactly `camelCase`, `PascalCase`, `snake_case`, or `kebab-case`. |
 ### Rule JSON
 
 ```json

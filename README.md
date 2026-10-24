@@ -22,9 +22,9 @@ Rules can describe things such as folder structure, note locations, filenames, f
 
 The goal is to make the health checker configurable enough that every user can describe their own vault conventions instead of relying on a fixed set of opinionated rules.
 
-The first configurable linter is planned to read rules from JSON. Each rule selects a check, its options, and the files or folders it applies to. The JSON reader and execution engine are not implemented yet.
+The first configurable linter reads rules from a versioned JSON file. The current plugin lets you configure a vault-relative file in settings and explicitly **Read/Validate** it. The reader validates the complete configuration and matches rule scopes against indexed files; it does not run checks or produce diagnostics yet.
 
-See [Linter checks and JSON rules](CHECKS.md) for the planned checks, required keys, allowed values, and execution semantics. [rules.example.json](rules.example.json) contains one basic rule for developing the reader and engine.
+See the [JSON rules guide](docs/json-rules.md) for setup, [Linter checks and JSON rules](CHECKS.md) for the schema and planned check behavior, and [rules.example.json](rules.example.json) for a valid example.
 
 A future node-based editor will visualize and edit the same configuration; it will not define a separate rule system.
 
