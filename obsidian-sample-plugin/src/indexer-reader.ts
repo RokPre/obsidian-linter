@@ -55,8 +55,12 @@ export function readRuleEngineFiles(cursor: Cursor, root: string): RuleEngineFil
 		 ORDER BY errors.file_id, errors.id`,
 	).fetchall()) {
 		if (typeof filePath !== 'string' || typeof message !== 'string') throw new Error('Invalid indexed frontmatter error row');
-		const line = optionalLine(rawLine);
-		malformed.set(relativePath(root, filePath), { status: 'malformed', message, ...(line === undefined ? {} : { line }) });
+		const bodyLine = optionalLine(rawLine);
+		malformed.set(relativePath(root, filePath), {
+			status: 'malformed',
+			message,
+			...(bodyLine === undefined ? {} : { line: bodyLine + 1 }),
+		});
 	}
 
 	const properties = new Map<string, string[]>();

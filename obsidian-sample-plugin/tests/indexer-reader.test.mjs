@@ -63,7 +63,7 @@ test('reader preserves absent, valid root-only, and malformed frontmatter with o
   assert.deepEqual(files, [
     { path: 'absent.md', kind: 'markdown', frontmatter: { status: 'absent' }, links: [] },
     { path: 'valid.md', kind: 'markdown', frontmatter: { status: 'valid', rootProperties: ['title'] }, links: [] },
-    { path: 'bad.md', kind: 'markdown', frontmatter: { status: 'malformed', message: 'bad yaml', line: 4 }, links: [] },
+    { path: 'bad.md', kind: 'markdown', frontmatter: { status: 'malformed', message: 'bad yaml', line: 5 }, links: [] },
   ]);
   const noLine = reader.readRuleEngineFiles(cursorFor([
     [/SELECT path, kind/, [['/vault/no-line.md', 'markdown']]],

@@ -123,6 +123,65 @@ test('run checks evaluates only persisted files and returns JCE-1 structured dia
   assert.ok(!result.diagnostics.some(({ ruleId }) => ruleId === 'disabled'));
   db.close();
 });
+test('run checks maps persisted malformed-frontmatter body lines to file lines', async () => {
+  const vault = await makeVault();
+  const sourcePath = join(vault, 'broken.md');
+  const missingLinePath = join(vault, 'missing-line.md');
+  const invalidLinePath = join(vault, 'invalid-line.md');
+  await writeFile(sourcePath, '---\na: *missing\n---\n');
+  await writeFile(missingLinePath, '---\ntitle: present\n');
+  await writeFile(invalidLinePath, '---\nb: *missing\n---\n');
+
+  const db = new SQL.Database();
+  const cursor = new indexer.Cursor(db);
+  indexer.initialize_database(cursor);
+  const directoryId = 1;
+  cursor.execute('INSERT INTO vault_directories (id, path, inode, parent_id) VALUES (?, ?, ?, NULL)', [directoryId, vault, 1]);
+  const parser = new indexer.MarkdownTreeParser();
+  const broken = indexer.parse_file(sourcePath, parser);
+  const missingLine = indexer.parse_file(missingLinePath, parser);
+  const invalidLine = indexer.parse_file(invalidLinePath, parser);
+  assert.equal(broken.frontmatter_result.error_line, 1);
+  assert.equal(missingLine.frontmatter_result.error_line, null);
+  assert.equal(invalidLine.frontmatter_result.error_line, 1);
+  indexer.insert_file(cursor, broken, directoryId);
+  indexer.insert_file(cursor, missingLine, directoryId);
+  indexer.insert_file(cursor, invalidLine, directoryId);
+  cursor.execute('UPDATE frontmatter_errors SET line = 0 WHERE file_id = (SELECT id FROM vault_files WHERE path = ?)', [invalidLinePath]);
+  cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 0 WHERE id = 1');
+  assert.deepEqual(cursor.execute('SELECT files.path, errors.line FROM frontmatter_errors AS errors JOIN vault_files AS files ON files.id = errors.file_id ORDER BY files.path').fetchall(), [
+    [sourcePath, 1],
+    [invalidLinePath, 0],
+    [missingLinePath, null],
+  ]);
+  await writeDatabase(vault, db);
+  cursor.release();
+  db.close();
+
+  const config = rulesConfig.parseRulesConfig(JSON.stringify({ version: 1, rules: [
+    { id: 'required', check: 'requiredFrontmatterProperty', enabled: true, severity: 'error', scope: { fileKinds: ['markdown'], include: ['*.md'] }, options: { properties: ['title'], caseSensitive: true } },
+    { id: 'required-copy', check: 'requiredFrontmatterProperty', enabled: true, severity: 'warning', scope: { fileKinds: ['markdown'], include: ['*.md'] }, options: { properties: ['title'], caseSensitive: true } },
+  ] }));
+
+  const result = await indexer.runChecksForVault(vault, '.obsidian', config);
+  assert.deepEqual(result.failures, []);
+  const brokenDiagnostics = result.diagnostics.filter(diagnostic => diagnostic.path === 'broken.md');
+  assert.deepEqual(brokenDiagnostics.map(({ ruleId, check, severity, line }) => ({ ruleId, check, severity, line })), [
+    { ruleId: 'required', check: 'requiredFrontmatterProperty', severity: 'error', line: 2 },
+    { ruleId: 'required-copy', check: 'requiredFrontmatterProperty', severity: 'warning', line: 2 },
+  ]);
+  assert.ok(brokenDiagnostics.every(diagnostic => diagnostic.message.startsWith('Frontmatter could not be parsed')));
+  for (const path of ['missing-line.md', 'invalid-line.md']) {
+    const diagnostics = result.diagnostics.filter(diagnostic => diagnostic.path === path);
+    assert.equal(diagnostics.length, 2);
+    assert.ok(diagnostics.every(diagnostic => Object.hasOwn(diagnostic, 'line') === false));
+    assert.ok(diagnostics.every(diagnostic => diagnostic.message.startsWith('Frontmatter could not be parsed')));
+  }
+  const persisted = new SQL.Database(await readFile(join(vault, '.obsidian', 'vaultHelper.db')));
+  assert.deepEqual(persisted.exec('SELECT line FROM frontmatter_errors WHERE file_id = (SELECT id FROM vault_files WHERE path = ?)', [sourcePath])[0].values, [[1]]);
+  assert.deepEqual(persisted.exec('SELECT line FROM frontmatter_errors WHERE file_id = (SELECT id FROM vault_files WHERE path = ?)', [invalidLinePath])[0].values, [[0]]);
+  persisted.close();
+});
 
 test('run checks reports unresolved links without source-node references', async () => {
   const vault = await makeVault();
@@ -288,7 +347,7 @@ test('worker routes typed run-checks and indexed-file requests without starting 
   assert.equal(malformedReply.result.diagnostics.length, 4);
   assert.ok(malformedReply.result.diagnostics.every(({ message }) => message.startsWith('Frontmatter could not be parsed')));
   assert.deepEqual(malformedReply.result.diagnostics.filter(({ path }) => path === 'bad_name.md').map(({ line }) => line), [undefined, undefined]);
-  assert.deepEqual(malformedReply.result.diagnostics.filter(({ path }) => path === 'bad_parse.md').map(({ line }) => line), [4, 4]);
+  assert.deepEqual(malformedReply.result.diagnostics.filter(({ path }) => path === 'bad_parse.md').map(({ line }) => line), [5, 5]);
   malformedDb.close();
 
   const linksVault = await makeVault();
