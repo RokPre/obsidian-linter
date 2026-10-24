@@ -26,8 +26,8 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	const settings = [];
 	const buttons = [];
 	const notices = [];
-	const errors = [];
 	const indexRequests = [];
+	const runChecksRequests = [];
 	const configRequests = [];
 	const saveRequests = [];
 	const savedSettings = [];
@@ -36,6 +36,11 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	const indexedFileRequests = [];
 	const parseRequests = [];
 	const matchRequests = [];
+	const consoleLogs = [];
+	const errors = [];
+	const allConsoleCalls = [];
+	const runChecksResult = rulesOptions.runChecksResult ?? { diagnostics: [], failures: [] };
+	const runChecksError = rulesOptions.runChecksError;
 	class TFile {
 		constructor(path) { this.path = path; }
 	}
@@ -106,7 +111,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 				removeCta() { this.cta = false; return this; },
 				onClick(callback) { this.click = callback; return this; },
 			};
-			this.button = button;
+			this.button ??= button;
 			buttons.push(button);
 			configure(button);
 			return this;
@@ -149,7 +154,13 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	vm.runInNewContext(compiled.outputFiles[0].text, {
 		module, exports: module.exports, process, performance, TextDecoder, Buffer, setTimeout,
 		__dirname: fileURLToPath(new URL('..', import.meta.url)),
-		console: { ...console, debug() {}, error(...args) { errors.push(args); } },
+		console: {
+			...console,
+			debug() {},
+			log(...args) { consoleLogs.push(args); allConsoleCalls.push(['log', ...args]); },
+			warn(...args) { consoleLogs.push(args); allConsoleCalls.push(['warn', ...args]); },
+			error(...args) { errors.push(args); allConsoleCalls.push(['error', ...args]); },
+		},
 		require(name) {
 			if (name === 'obsidian') return { AbstractInputSuggest, FileSystemAdapter, TFile, PluginSettingTab, Setting, Notice };
 			if (name.endsWith('rules-config')) return rulesConfig;
@@ -166,7 +177,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 				.map(path => ({ path: path.split(sep).join('/') }));
 		},
 		getAbstractFileByPath(path) {
-			if (typeof adapter !== 'string') return null;
+			if (typeof adapter !== 'string') return rulesOptions.rulesSource === undefined ? null : new TFile(path);
 			try {
 				return statSync(join(adapter, path)).isFile() ? new TFile(path) : null;
 			} catch {
@@ -176,7 +187,10 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 		async read(file) {
 			const vaultPath = typeof adapter === 'string' ? adapter : adapter?.getBasePath?.() ?? '';
 			vaultReads.push({ vaultPath, path: file.path });
-			if (typeof adapter !== 'string') throw new Error('Vault file is not readable');
+			if (typeof adapter !== 'string') {
+				if (rulesOptions.rulesSource !== undefined) return rulesOptions.rulesSource;
+				throw new Error('Vault file is not readable');
+			}
 			return readFile(join(adapter, file.path), 'utf8');
 		},
 	};
@@ -195,6 +209,11 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 			getIndexedFiles(vaultPath, configDir) {
 				indexedFileRequests.push([vaultPath, configDir]);
 				return Promise.resolve(rulesOptions.indexedFiles ?? []);
+			},
+			runChecks(vaultPath, configDir, config) {
+				runChecksRequests.push([vaultPath, configDir, config]);
+				if (runChecksError) return Promise.reject(runChecksError);
+				return Promise.resolve(runChecksResult);
 			},
 			indexVault(vaultPath, paths, configDir) {
 				indexRequests.push([...paths]);
@@ -216,12 +235,14 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 		tab.getSettingDefinitions()[0].render({ settingEl: renderRoot }, {});
 	}
 	return {
-		settings, notices, errors, tab, plugin, buttons, indexRequests, configRequests, saveRequests, savedSettings,
-		suggestions, renderRoot, vaultReads, indexedFileRequests, parseRequests, matchRequests,
+		settings, notices, errors, consoleLogs, allConsoleCalls, tab, plugin, buttons, indexRequests, runChecksRequests,
+		configRequests, saveRequests, savedSettings, suggestions, renderRoot, vaultReads, indexedFileRequests,
+		parseRequests, matchRequests,
 		defaults: module.exports.DEFAULT_SETTINGS,
 		rulesSetting: settings.find(setting => setting.name === 'Rules JSON file'),
 		rulesInput: settings.find(setting => setting.name === 'Rules JSON file')?.text,
 		readValidateButton: settings.find(setting => setting.name === 'Rules JSON file')?.button,
+		runChecksButton: buttons.find(button => button.label === 'Run checks'),
 		button: settings.find(setting => setting.name === 'Indexing')?.button,
 		get pickers() {
 			return settings.filter(setting =>
@@ -243,7 +264,7 @@ test('declarative settings define a searchable ignored-path editor', async () =>
 		assert.equal(typeof definition.render, 'function');
 		assert.ok(ui.renderRoot.children.length > 0);
 		assert.equal(ui.pickers.length, 1);
-		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault', 'Read/Validate']);
+		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault', 'Read/Validate', 'Run checks']);
 		assert.equal(ui.descriptions[0], definition.desc);
 		assert.equal(ui.buttons.find(button => button.label === 'Save').disabled, true);
 		assert.deepEqual(ui.saveRequests, []);
@@ -861,8 +882,8 @@ test('Read/Validate manually matches only the current indexed-file projection', 
 			files: indexedFiles,
 		}]);
 		assert.equal(JSON.stringify(ui.matchRequests[0].matches).includes('notIndexed.md'), false);
-		assert.equal(ui.notices.length, 1, 'the only user-facing result is the validity Notice');
-		assert.match(ui.notices[0], /valid/i);
+		assert.equal(ui.runChecksRequests.length, 0);
+		assert.equal(ui.allConsoleCalls.length, 0, 'Read/Validate must not log execution findings or summaries');
 		assert.equal(ui.notices[0].includes('camelNote.md'), false);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
@@ -996,6 +1017,177 @@ test('an empty rules path reports that it is unconfigured without attempting a r
 		assert.deepEqual(ui.parseRequests, []);
 		assert.deepEqual(ui.indexedFileRequests, []);
 		assert.deepEqual(ui.matchRequests, []);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+test('Run checks executes only on explicit invocation and passes the full parsed configuration', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-run-checks-explicit-'));
+	const rulesFilePath = 'settings/rules.json';
+	const config = {
+		version: 1,
+		rules: [
+			{ id: 'disabled', check: 'filenameCase', enabled: false, severity: 'info', scope: { fileKinds: ['markdown'], include: ['**/*.md'] }, options: { case: 'snake_case' } },
+			{ id: 'first', check: 'filenameCase', enabled: true, severity: 'warning', scope: { fileKinds: ['markdown'], include: ['**/*.md'] }, options: { case: 'camelCase' } },
+			{ id: 'second', check: 'filenameCase', enabled: true, severity: 'error', scope: { fileKinds: ['markdown'], include: ['**/*.md'] }, options: { case: 'PascalCase' } },
+		],
+	};
+	const rulesSource = JSON.stringify(config);
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		await writeFile(join(vault, rulesFilePath), rulesSource);
+		const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath });
+		assert.deepEqual(ui.runChecksRequests, []);
+		await ui.readValidateButton.click();
+		assert.deepEqual(ui.runChecksRequests, [], 'Read/Validate must not execute checks');
+		assert.deepEqual(ui.indexRequests, []);
+		await ui.runChecksButton.click();
+		assert.deepEqual(ui.vaultReads, [{ vaultPath: vault, path: rulesFilePath }, { vaultPath: vault, path: rulesFilePath }]);
+		assert.deepEqual(ui.parseRequests, [rulesSource, rulesSource]);
+		assert.deepEqual(JSON.parse(JSON.stringify(ui.runChecksRequests)), [[vault, 'custom-config', config]]);
+		assert.deepEqual(ui.indexRequests, []);
+		assert.equal(ui.runChecksButton.disabled, false);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Run checks rejects malformed JSON and invalid later or disabled rules before execution', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-run-checks-invalid-'));
+	const rulesFilePath = 'settings/rules.json';
+	const validRule = { id: 'valid', check: 'filenameCase', enabled: true, severity: 'warning', scope: { fileKinds: ['markdown'], include: ['**/*.md'] }, options: { case: 'camelCase' } };
+	const invalidRule = { ...validRule, id: 'invalid', options: { case: 'not-a-case' } };
+	try {
+		await mkdir(join(vault, 'settings'), { recursive: true });
+		for (const source of [
+			'{not-json',
+			JSON.stringify({ version: 1, rules: [validRule, invalidRule] }),
+			JSON.stringify({ version: 1, rules: [{ ...invalidRule, enabled: false }] }),
+		]) {
+			await writeFile(join(vault, rulesFilePath), source);
+			const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath });
+			await ui.runChecksButton.click();
+			assert.deepEqual(ui.runChecksRequests, [], 'the canonical parser must reject the whole config before execution');
+			assert.match(ui.notices[0], /settings\/rules\.json/i);
+			assert.equal(ui.parseRequests.length, 1);
+			assert.equal(ui.runChecksButton.disabled, false);
+		}
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Run checks logs structured findings, separate failures, and distinct result counts', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-run-checks-logs-'));
+	const rulesFilePath = 'rules.json';
+	const diagnostics = [
+		{ ruleId: 'one', check: 'filenameCase', severity: 'warning', path: 'notes/a.md', message: 'Wrong case', line: 4 },
+		{ ruleId: 'two', check: 'requiredFrontmatterProperty', severity: 'error', path: 'notes/b.md', message: 'Missing title' },
+	];
+	const failures = [{ ruleId: 'three', check: 'unresolvedInternalLinks', message: 'Could not evaluate' }];
+	try {
+		await writeFile(join(vault, rulesFilePath), '{"version":1,"rules":[]}');
+		const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath, runChecksResult: { diagnostics, failures } });
+		await ui.runChecksButton.click();
+		const loggedDiagnostics = ui.consoleLogs.filter(args => args[0] === 'Rule check finding').map(args => args[1]);
+		assert.deepEqual(JSON.parse(JSON.stringify(loggedDiagnostics)), diagnostics);
+		assert.equal('line' in loggedDiagnostics[1], false);
+		assert.deepEqual(JSON.parse(JSON.stringify(ui.errors.filter(args => args[0] === 'Rule check failure').map(args => args[1]))), failures);
+		const summary = ui.consoleLogs.find(args => args[0] === 'Rule checks completed')?.[1];
+		assert.deepEqual(JSON.parse(JSON.stringify(summary)), { findings: 2, failures: 1, status: 'partial' });
+		assert.deepEqual(ui.indexRequests, []);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Run checks distinguishes clean empty success from failures without findings', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-run-checks-counts-'));
+	try {
+		await writeFile(join(vault, 'rules.json'), '{"version":1,"rules":[]}');
+		const clean = await settingsTab(vault, [], 'legacy', { rulesFilePath: 'rules.json' });
+		await clean.runChecksButton.click();
+		assert.deepEqual(JSON.parse(JSON.stringify(clean.consoleLogs.find(args => args[0] === 'Rule checks completed')[1])), {
+			findings: 0, failures: 0, status: 'clean',
+		});
+
+		const failed = await settingsTab(vault, [], 'legacy', {
+			rulesFilePath: 'rules.json',
+			runChecksResult: { diagnostics: [], failures: [{ ruleId: 'broken', check: 'filenameCase', message: 'failure' }] },
+		});
+		await failed.runChecksButton.click();
+		assert.deepEqual(JSON.parse(JSON.stringify(failed.consoleLogs.find(args => args[0] === 'Rule checks completed')[1])), {
+			findings: 0, failures: 1, status: 'partial',
+		});
+		assert.equal(failed.consoleLogs.some(args => args[0] === 'Rule check finding'), false);
+		assert.equal(failed.errors.filter(args => args[0] === 'Rule check failure').length, 1);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Run checks reports read, adapter, and run errors and always re-enables without indexing', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-run-checks-errors-'));
+	try {
+		await writeFile(join(vault, 'rules.json'), '{"version":1,"rules":[]}');
+		const pending = await settingsTab(vault, [], 'legacy', { rulesFilePath: 'rules.json' });
+		let resolveRun;
+		let onRunStarted;
+		const runStarted = new Promise(resolve => { onRunStarted = resolve; });
+		pending.plugin.indexerClient.runChecks = (...args) => {
+			pending.runChecksRequests.push(args);
+			onRunStarted();
+			return new Promise(resolve => { resolveRun = resolve; });
+		};
+		const running = pending.runChecksButton.click();
+		assert.equal(pending.runChecksButton.disabled, true);
+		await runStarted;
+		resolveRun({ diagnostics: [], failures: [] });
+		await running;
+		assert.equal(pending.runChecksButton.disabled, false);
+		assert.deepEqual(pending.indexRequests, []);
+
+		const runError = await settingsTab(vault, [], 'legacy', {
+			rulesFilePath: 'rules.json', runChecksError: new Error('index is not ready; select Index vault'),
+		});
+		await runError.runChecksButton.click();
+		assert.equal(runError.runChecksButton.disabled, false);
+		assert.match(runError.notices[0], /index is not ready; select Index vault/i);
+		assert.equal(runError.consoleLogs.some(args => args[0] === 'Rule checks completed'), false);
+		assert.equal(runError.errors.length, 1);
+		assert.deepEqual(runError.indexRequests, []);
+
+		const readError = await settingsTab(vault, [], 'legacy', { rulesFilePath: 'rules.json' });
+		readError.tab.app.vault.read = async () => { throw new Error('vault read unavailable'); };
+		await readError.runChecksButton.click();
+		assert.match(readError.notices[0], /rules\.json.*vault read unavailable/i);
+		assert.deepEqual(readError.runChecksRequests, []);
+		assert.equal(readError.runChecksButton.disabled, false);
+		assert.deepEqual(readError.indexRequests, []);
+
+		const unavailable = await settingsTab({ type: 'mobile' }, [], 'legacy', {
+			rulesFilePath: 'rules.json', rulesSource: '{"version":1,"rules":[]}',
+		});
+		await unavailable.runChecksButton.click();
+		assert.match(unavailable.notices[0], /desktop/i);
+		assert.deepEqual(unavailable.runChecksRequests, []);
+		assert.equal(unavailable.runChecksButton.disabled, false);
+		assert.deepEqual(unavailable.indexRequests, []);
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
+test('Run checks reports an empty path without reading or executing', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-run-checks-empty-'));
+	try {
+		const ui = await settingsTab(vault);
+		await ui.runChecksButton.click();
+		assert.match(ui.notices[0], /path.*not configured/i);
+		assert.deepEqual(ui.vaultReads, []);
+		assert.deepEqual(ui.parseRequests, []);
+		assert.deepEqual(ui.runChecksRequests, []);
+		assert.equal(ui.runChecksButton.disabled, false);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}
