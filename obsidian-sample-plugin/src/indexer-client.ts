@@ -4,8 +4,9 @@ import type {
 	LinkResolution,
 	LinkTargetQuery,
 	LinkTargetSelection,
+	RunChecksResult,
 } from './indexer';
-import type { IndexedFile } from './rules-config';
+import type { IndexedFile, RulesConfig } from './rules-config';
 import { isIgnoredVaultPath } from './ignored-paths';
 
 interface ObsidianIndexHost {
@@ -18,6 +19,7 @@ type IndexReply =
 	| { id: number; error: string }
 	| { id: number; type: 'resolve-links'; queries: LinkTargetQuery[] }
 	| { id: number; type: 'indexed-files-result'; files: IndexedFile[] }
+	| { id: number; type: 'run-checks-result'; result: RunChecksResult }
 	| { progress: IndexProgress };
 
 interface PendingIndex {
@@ -34,7 +36,13 @@ interface PendingIndexedFiles {
 	reject: (error: Error) => void;
 }
 
-type PendingRequest = PendingIndex | PendingIndexedFiles;
+interface PendingRunChecks {
+	kind: 'run-checks';
+	resolve: (result: RunChecksResult) => void;
+	reject: (error: Error) => void;
+}
+
+type PendingRequest = PendingIndex | PendingIndexedFiles | PendingRunChecks;
 
 export class IndexerClient {
 	private worker: Worker;
@@ -67,15 +75,16 @@ export class IndexerClient {
 				if (request.kind === 'index') this.resolveLinks(reply.id, request, reply.queries);
 				else {
 					this.pending.delete(reply.id);
-					request.reject(new Error('Unexpected link-resolution request for indexed files.'));
+					request.reject(new Error('Unexpected link-resolution request for this worker request.'));
 				}
 				return;
 			}
 
 			this.pending.delete(reply.id);
 			if ('error' in reply) request.reject(new Error(reply.error));
-			else if ('result' in reply && request.kind === 'index') request.resolve(reply.result);
+			else if ('result' in reply && !('type' in reply) && request.kind === 'index') request.resolve(reply.result);
 			else if ('files' in reply && request.kind === 'files') request.resolve(reply.files);
+			else if ('type' in reply && reply.type === 'run-checks-result' && request.kind === 'run-checks') request.resolve(reply.result);
 			else request.reject(new Error('Unexpected indexer worker response.'));
 			if (request.kind === 'index') {
 				this.pendingIndexCount--;
@@ -112,6 +121,16 @@ export class IndexerClient {
 			const id = ++this.nextId;
 			this.pending.set(id, { kind: 'files', resolve, reject });
 			this.worker.postMessage({ id, type: 'get-indexed-files', vaultPath, configDir });
+		});
+	}
+
+	runChecks(vaultPath: string, configDir: string, config: RulesConfig): Promise<RunChecksResult> {
+		if (this.failure !== undefined) return Promise.reject(this.failure);
+
+		return new Promise((resolve, reject) => {
+			const id = ++this.nextId;
+			this.pending.set(id, { kind: 'run-checks', resolve, reject });
+			this.worker.postMessage({ id, type: 'run-checks', vaultPath, configDir, config });
 		});
 	}
 

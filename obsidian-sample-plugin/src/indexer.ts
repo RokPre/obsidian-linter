@@ -13,6 +13,9 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { isIgnoredVaultPath } from './ignored-paths';
 import type { IndexedFile } from './rules-config';
+import { assertIndexReady, readIndexedFiles as readIndexedFilesFromCursor, readRuleEngineFiles } from './indexer-reader';
+import { matchRulesToFiles, type RulesConfig } from './rules-config';
+import { evaluateRules, type RuleDiagnostic, type RuleExecutionFailure } from './rules-engine';
 
 
 let IGNORED_PATHS: string[] = [];
@@ -1613,25 +1616,20 @@ function resolve_vault_path(vault_path: string): string {
 	return fs.realpathSync(resolved_path);
 }
 
-async function readIndexedFiles(databasePath: string, root: string): Promise<IndexedFile[]> {
+async function withExistingCursor<T>(databasePath: string, read: (cursor: Cursor) => T): Promise<T> {
 	const SQL = await (sqlite ??= initSqlJs({ wasmBinary: sqliteBinary.buffer }));
 	const connection = new SQL.Database(fs.readFileSync(databasePath));
 	const cursor = new Cursor(connection);
 	try {
-		return cursor.execute('SELECT path, kind FROM vault_files ORDER BY path').fetchall().map(([filePath, kind]) => {
-			if (typeof filePath !== 'string' || typeof kind !== 'string') {
-				throw new Error('Indexed file path or kind is not a string');
-			}
-			const relativePath = path.relative(root, filePath);
-			if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
-				throw new Error(`Indexed file is outside the vault: ${filePath}`);
-			}
-			return { path: relativePath.split(path.sep).join('/'), kind: kind as IndexedFile['kind'] };
-		});
+		return read(cursor);
 	} finally {
 		cursor.release();
 		connection.close();
 	}
+}
+
+async function readIndexedFiles(databasePath: string, root: string): Promise<IndexedFile[]> {
+	return withExistingCursor(databasePath, cursor => readIndexedFilesFromCursor(cursor, root));
 }
 
 export async function getIndexedFiles(databasePath: string, vaultPath: string): Promise<IndexedFile[]> {
@@ -1642,6 +1640,45 @@ export async function getIndexedFilesForVault(vaultPath: string, configDir: stri
 	const root = resolve_vault_path(vaultPath);
 	const databasePath = path.resolve(path.join(root, configDir, 'vaultHelper.db'));
 	return readIndexedFiles(databasePath, root);
+}
+
+export interface RunChecksResult {
+	diagnostics: RuleDiagnostic[];
+	failures: RuleExecutionFailure[];
+}
+
+export async function runChecksForVault(
+	vaultPath: string,
+	configDir: string,
+	config: RulesConfig,
+): Promise<RunChecksResult> {
+	const root = resolve_vault_path(vaultPath);
+	const databasePath = path.resolve(path.join(root, configDir, 'vaultHelper.db'));
+	if (!fs.existsSync(databasePath)) {
+		throw new Error('The persisted index is missing or not ready. Select Index vault before running checks.');
+	}
+
+	return withExistingCursor(databasePath, cursor => {
+		assertIndexReady(cursor);
+		const files = readRuleEngineFiles(cursor, root);
+		const matches = new Map(matchRulesToFiles(config, files).map(match => [match.ruleId, match.files]));
+		const result: RunChecksResult = { diagnostics: [], failures: [] };
+		for (const rule of config.rules) {
+			if (!rule.enabled) continue;
+			try {
+				const evaluated = evaluateRules({ rules: [rule], files: matches.get(rule.id) ?? [] });
+				for (const diagnostic of evaluated.diagnostics) result.diagnostics.push(diagnostic);
+				result.failures.push(...evaluated.failures);
+			} catch (error) {
+				result.failures.push({
+					ruleId: rule.id,
+					check: rule.check,
+					message: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+		return result;
+	});
 }
 
 

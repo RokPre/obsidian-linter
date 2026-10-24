@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -60,6 +60,13 @@ function matchedPaths(ruleId, config, files) {
 	const match = api.matchRulesToFiles(config, files).find((item) => item.ruleId === ruleId);
 	return match?.files.map(({ path }) => path);
 }
+
+test('accepts the repository example with the real rules parser', async () => {
+	const source = await readFile(resolve(PLUGIN_DIR, '..', 'rules.example.json'), 'utf8');
+	const config = api.parseRulesConfig(source);
+	assert.equal(config.version, 1);
+	assert.equal(config.rules[0]?.id, 'require-aliases');
+});
 
 test('accepts version 1 documents and a zero-rule configuration', () => {
 	assert.deepEqual(parse(makeDocument([])), { version: 1, rules: [] });

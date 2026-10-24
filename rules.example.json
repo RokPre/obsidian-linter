@@ -12,7 +12,8 @@
         "exclude": []
       },
       "options": {
-        "property": "aliases"
+        "properties": ["aliases"],
+        "caseSensitive": true
       }
     }
   ]

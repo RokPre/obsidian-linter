@@ -305,6 +305,52 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 							button.setDisabled(false);
 						}
 					}),
+			)
+			.addButton((button) =>
+				button
+					.setButtonText('Run checks')
+					.onClick(async () => {
+						const rulesFilePath = this.plugin.settings.rulesFilePath;
+						if (rulesFilePath === '') {
+							new Notice('Rules file path is not configured.');
+							return;
+						}
+
+						button.setDisabled(true);
+						try {
+							const file = this.app.vault.getAbstractFileByPath(rulesFilePath);
+							if (!(file instanceof TFile)) throw new Error('File not found in the active vault.');
+							const source = await this.app.vault.read(file);
+							const config = parseRulesConfig(source);
+							const adapter = this.app.vault.adapter;
+							if (!(adapter instanceof FileSystemAdapter)) {
+								throw new Error('Running checks requires Obsidian desktop.');
+							}
+
+							const result = await this.plugin.indexerClient.runChecks(
+								adapter.getBasePath(),
+								this.app.vault.configDir,
+								config,
+							);
+							for (const diagnostic of result.diagnostics) {
+								console.warn('Rule check finding', diagnostic);
+							}
+							for (const failure of result.failures) {
+								console.error('Rule check failure', failure);
+							}
+							console.warn('Rule checks completed', {
+								findings: result.diagnostics.length,
+								failures: result.failures.length,
+								status: result.failures.length === 0 ? 'clean' : 'partial',
+							});
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							console.error('Rule checks failed', error);
+							new Notice(`${rulesFilePath}: ${message}`);
+						} finally {
+							button.setDisabled(false);
+						}
+					}),
 			);
 
 	}

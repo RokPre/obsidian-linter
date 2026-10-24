@@ -1,10 +1,8 @@
 # Linter checks and JSON rules
 
-This document specifies the first configurable linter checks planned for the Obsidian plugin. The JSON rule reader, execution engine, and diagnostics sidebar are not implemented yet. The existing Python health checker contains related checks, but it does not read this configuration.
+This document is the authoritative version 1 reference for the JSON rule format and the three checks available in the Obsidian plugin. To configure a rules file, see the [JSON rules guide](docs/json-rules.md). The root [rules.example.json](rules.example.json) is a complete example configuration.
 
-A **check** is an implemented capability, such as testing whether a frontmatter property exists. A **rule** is one configured use of a check: which files to inspect, which options to use, and how to report violations. Multiple rules can use the same check with different scopes and options.
-
-[rules.example.json](rules.example.json) contains a complete, single-rule configuration for initial reader and engine development.
+A **check** names a validation, and a **rule** configures one use of a check: which indexed files it applies to, which options it uses, and how its findings are reported. The settings action **Run checks** executes enabled rules manually. **Read/Validate** validates the whole configuration and matches rule scopes against indexed files only; it does not execute checks or produce findings.
 
 ## Configuration format
 
@@ -25,7 +23,8 @@ A configuration is a UTF-8 JSON file with this structure:
         "exclude": []
       },
       "options": {
-        "property": "aliases"
+        "properties": ["aliases"],
+        "caseSensitive": true
       }
     }
   ]
@@ -34,20 +33,20 @@ A configuration is a UTF-8 JSON file with this structure:
 
 ### Required keys and allowed values
 
-All keys listed below are required. There are no implicit defaults in version 1. JSON comments and trailing commas are not allowed.
+All top-level fields shown below are required; `scope.exclude` is optional. There are no implicit defaults for required fields in version 1. JSON comments and trailing commas are not allowed.
 
 | Key | Type | Accepted value or meaning |
 | --- | --- | --- |
 | `version` | Integer | Exactly `1`; other versions are unsupported. |
-| `rules` | Array of rule objects | Zero or more rules. An empty array runs no checks. |
+| `rules` | Array of rule objects | Zero or more rules. An empty array contains no configured rules. |
 | `rules[].id` | String | Non-empty, not whitespace-only, and unique within the configuration. Identifies the configured rule, not a database row. |
 | `rules[].check` | String | Exactly `requiredFrontmatterProperty`, `filenameCase`, or `unresolvedInternalLinks`. Names are case-sensitive. |
-| `rules[].enabled` | Boolean | `true` executes the rule; `false` disables it without removing it. |
-| `rules[].severity` | String | Exactly `info`, `warning`, or `error`. Controls diagnostic severity, not check behavior. |
-| `rules[].scope` | Object | Contains `fileKinds`, `include`, and `exclude`, as defined below. |
+| `rules[].enabled` | Boolean | Required and validated. Only enabled rules execute. |
+| `rules[].severity` | String | Exactly `info`, `warning`, or `error`; included in findings and does not alter check behavior. |
+| `rules[].scope` | Object | Contains `fileKinds` and `include`, plus optional `exclude`, as defined below. |
 | `rules[].options` | Object | Contains exactly the options documented for the selected check. |
 
-The future reader must reject missing keys, unknown keys, unknown check names, incorrect types, unsupported values, and duplicate rule IDs. This includes validation of disabled rules. Invalid configuration must prevent execution and produce a configuration error; it must not be silently treated as an empty or successful health check.
+The reader rejects missing or unknown keys, unknown check names, incorrect types, unsupported values, invalid patterns, and duplicate rule IDs. It validates the entire configuration, including disabled rules, before returning scope matches or running any check. If any part is invalid, no rules execute.
 
 ### File and folder scope
 
@@ -55,9 +54,9 @@ Version 1 scopes select files. A folder pattern selects its descendant files; it
 
 | Scope key | Type | Accepted value or meaning |
 | --- | --- | --- |
-| `fileKinds` | Array of strings | Exactly `["markdown"]` for these initial checks. Other file kinds are not supported in version 1. |
-| `include` | Array of pattern strings | At least one pattern. A file must match at least one to be selected. |
-| `exclude` | Array of pattern strings | Zero or more patterns. Matching any exclusion removes the file, even if an inclusion matches. |
+| `fileKinds` | Array of strings | Known indexed kinds: `markdown`, `excalidraw`, `pdf`, `image`, `script`, `video`, `recording`, and `other`. An empty array selects no files. `filenameCase` accepts any indexed kind; the other checks accept only `markdown`. |
+| `include` | Array of pattern strings | Required and non-empty. A file must match at least one pattern to be selected. |
+| `exclude` | Array of pattern strings | Optional; when present, zero or more patterns. Matching any exclusion removes the file, even if an inclusion matches. |
 
 Patterns match the entire vault-relative file path, including its extension. Use `/` separators on every platform. Matching is case-sensitive, including extensions. Patterns also match hidden path components; there is no additional hidden-file exclusion at the rule layer.
 
@@ -88,37 +87,43 @@ This selects indexed Markdown files below `knowledge`, including nested folders,
 
 **Index exclusions and rule exclusions are different.** Rule scope cannot select files omitted by the indexer. Excluding a source file from one rule does not remove it from the index or make it invisible to other checks.
 
-### Execution and reporting
+## Execution and reporting
 
-- Enabled rules run independently and contribute diagnostics to the same health-check result. Rule order must not change their meaning; version 1 has no execution edges, dependencies, branches, or automatic fixes.
-- Reusing a check with different rule IDs creates separate configured rules. Their findings remain attributed to their respective rule IDs, even if they concern the same file.
-- Checks operate on a completed index whose required derived data is ready. An indexing or execution failure must be reported separately from lint violations and must not appear as a clean result.
-- Each diagnostic identifies the rule ID, check name, severity, vault-relative file path, and a human-readable message. A source line is included when available and meaningful. Lines are one-based; a file-level finding may have no line.
-- Missing fields, parsing failures, and unsupported data must not be converted into fabricated source locations. For malformed frontmatter, report the parsing problem and skip checks that depend on interpreting its properties.
-- JSON is the canonical execution configuration. A future node editor must edit the same rule semantics. Node positions and other visual layout data are not part of this version 1 format.
+**Run checks** is a manual settings action. It reads the configured JSON file and strictly validates the entire configuration before execution. Invalid JSON or any invalid rule blocks the whole run; disabled rules are validated too. Only enabled rules execute, independently. Rule order does not change meaning, and reusing a check under different rule IDs preserves separate attribution for each rule.
+
+Each rule applies only to indexed files whose kind matches and whose vault-relative path matches at least one `include` pattern and no `exclude` pattern. Scope selects source files; only indexed files can be selected. A folder pattern selects descendant files, not the folder itself. For `unresolvedInternalLinks`, scope selects the Markdown source files; target resolution searches the available index independently of that source scope.
+
+Run checks requires an existing persisted index with `vault_index_state.derived_data_dirty === 0`. It does not start indexing or fall back to indexing. If the index is absent or its derived data is dirty, the run fails and directs the user to **Index vault**. A ready index is a snapshot and may not reflect filesystem changes that have not been indexed. Running and matching checks currently require Obsidian desktop; unsupported adapters are reported as errors.
+
+Each finding is logged as a structured diagnostic with `ruleId`, `check`, configured `severity`, vault-relative `path`, and a human-readable `message`. A one-based `line` is included only when meaningful indexed source-line data exists; file-level findings and occurrences without an indexed line omit it. Lines are never invented. Failures are logged separately from diagnostics. Index-read/readiness errors fail the run as a whole; a rule-level failure is not a finding and does not stop other rules. A run with any rule failure is partial/failed, never clean. The console summary reports finding and failure counts and distinguishes an empty successful run from failures. Exact object serialization and summary wording are not contractual. No results window or sidebar is opened.
+
+JSON defines the canonical rule configuration. Existing long-term plans for a node-based editor or shared visual workflow are separate from these three implemented checks; this format contains no visual layout, execution branches, dependencies, or automatic fixes.
 
 ## 1. Required frontmatter property
 
 **Check name:** `requiredFrontmatterProperty`
 
-**Core idea:** selected notes must declare a particular top-level frontmatter property.
+**Core idea:** selected notes must declare configured top-level frontmatter properties.
 
 ### Behavior
 
-For each selected Markdown note, test whether the configured property is present at the frontmatter root. Emit one diagnostic when it is missing.
+For each enabled, in-scope Markdown file, emit one diagnostic for each distinct effective configured property name absent from the frontmatter root. Distinctness follows `caseSensitive`: identical names are one effective name, and case-equivalent names are one when comparison is case-insensitive. Repeated entries remain valid configuration but do not duplicate findings.
 
-- A note without frontmatter is missing the property.
-- Presence is sufficient: `aliases: null`, `aliases: []`, and `aliases: ""` all satisfy this check. It does not validate the value's type or require a non-empty value.
+- A note without frontmatter is missing each required property.
+- Presence at the root is sufficient, including `null`, an empty list, or an empty string. The check does not validate value type or non-emptiness.
 - Nested properties do not satisfy a top-level requirement. `metadata: {aliases: []}` does not supply a top-level `aliases` property.
-- Property names are case-sensitive and matched exactly. `Aliases` does not satisfy `aliases`.
-- Malformed frontmatter is a parsing problem, not evidence that the property is absent. Skip this property check for that note and report the parsing problem separately.
+- Property-name comparison is controlled by the required `caseSensitive` option.
+- For malformed frontmatter, each applicable required-property rule reports its own parse-problem diagnostic, optionally including indexed parser detail and line. It skips missing-property checks for that note under that rule.
 - There are no built-in exceptions for folders such as `people` or `diary`; exclusions belong in the rule's scope.
+
+The missing-property diagnostic is file-level and has no line because the absent property has no source location.
 
 ### Options
 
 | Key | Type | Accepted value |
 | --- | --- | --- |
-| `property` | String | Required. A non-empty, non-whitespace-only top-level property name, such as `aliases`, `tags`, or `related`. The value is not trimmed or interpreted as a nested property path. |
+| `properties` | Array of strings | Required. Every listed name is a required top-level property; values are not trimmed or interpreted as nested property paths. |
+| `caseSensitive` | Boolean | Required. Controls whether property-name matching is case-sensitive. |
 
 ### Rule JSON
 
@@ -136,42 +141,40 @@ This is a rule object to place inside the configuration's `rules` array:
     "exclude": ["knowledge/templates/**"]
   },
   "options": {
-    "property": "aliases"
+    "properties": ["aliases"],
+    "caseSensitive": true
   }
 }
 ```
 
-For `knowledge/cameraModel.md` without this property, the message is `Required frontmatter property \`aliases\` is missing.` This is a file-level finding without a source line because the missing property has no existing location.
+For `knowledge/cameraModel.md` without this property, the message states that the required frontmatter property `aliases` is missing. This is a file-level finding with no source line because the missing property has no existing location.
 
 ## 2. Filename case
 
 **Check name:** `filenameCase`
 
-**Core idea:** selected notes must follow the configured filename convention.
+**Core idea:** selected files must follow the configured filename convention.
 
 ### Behavior
 
-Validate the file's stem: remove only the final extension and inspect the remaining filename. Do not validate folder names or change any files.
+Validate only the indexed file's basename stem: remove only its final extension and inspect what remains. For example, `Camera.Model.md` has stem `Camera.Model`; its earlier suffix is not stripped. Do not validate directory names or extension casing, and do not modify files.
 
-Version 1 supports only `camelCase`, using the existing check's predicate `^[a-z][a-zA-Z0-9]*$`: the first character must be an ASCII lowercase letter; subsequent characters must be ASCII letters or digits.
+Version 1 supports exactly four filename conventions. The selected convention applies to the stem:
 
-| Filename | Result | Reason |
+| Convention | Rule | Valid stems |
 | --- | --- | --- |
-| `cameraModel.md` | Pass | Lowercase initial letter, followed by letters. |
-| `note2.md` | Pass | Digits are allowed after the initial letter. |
-| `myHTTP2.md` | Pass | Consecutive uppercase letters are allowed by this predicate. |
-| `CameraModel.md` | Finding | Initial letter is uppercase. |
-| `camera_model.md` | Finding | Underscores are not allowed. |
-| `camera.model.md` | Finding | The stem contains a dot. |
-| `2notes.md` | Finding | Initial character is a digit. |
+| `camelCase` | Starts with an ASCII lowercase letter, followed by ASCII letters or digits. | `cameraModel`, `note2`, `myHTTP2` |
+| `PascalCase` | Starts with an ASCII uppercase letter, followed by ASCII letters or digits. Acronym runs are allowed. | `CameraModel`, `XMLParser2` |
+| `snake_case` | Starts with a lowercase ASCII letter; lowercase ASCII alphanumeric parts are separated by single underscores. | `camera_model`, `camera2_model` |
+| `kebab-case` | Starts with a lowercase ASCII letter; lowercase ASCII alphanumeric parts are separated by single hyphens. | `camera-model`, `camera2-model` |
 
-This predicate does not infer word boundaries or enforce acronym capitalization. There are no built-in filename exceptions; exclude files such as `README.md` explicitly if needed.
+There are no built-in filename exceptions; exclude files such as `README.md` explicitly if needed.
 
 ### Options
 
 | Key | Type | Accepted value |
 | --- | --- | --- |
-| `case` | String | Required. Exactly `camelCase` in version 1. Other naming conventions are unsupported. |
+| `case` | String | Required. Exactly `camelCase`, `PascalCase`, `snake_case`, or `kebab-case`. |
 
 ### Rule JSON
 
@@ -192,7 +195,9 @@ This predicate does not infer word boundaries or enforce acronym capitalization.
 }
 ```
 
-For `knowledge/CameraModel.md`, the message is `Filename \`CameraModel.md\` does not match \`camelCase\`.` This is a file-level finding without a source line.
+For `knowledge/CameraModel.md`, the file-level finding has no source line. The message identifies the selected convention:
+
+> Filename `CameraModel.md` does not match `camelCase`.
 
 ## 3. Unresolved internal links
 
@@ -202,18 +207,20 @@ For `knowledge/CameraModel.md`, the message is `Filename \`CameraModel.md\` does
 
 ### Behavior
 
-Inspect indexed link occurrences originating in selected Markdown files, including links indexed from their frontmatter. Compare each occurrence's resolution status with the configured statuses. Emit one diagnostic per matching occurrence, rather than one per distinct target.
+Inspect indexed link occurrences originating in enabled, in-scope Markdown source files, including links indexed from their frontmatter. Emit one diagnostic per matching occurrence, not one per distinct target. Repeated links to the same target therefore remain separate findings.
 
-Scope selects the **source files**, not the target search space. Targets may resolve anywhere in the indexed vault, including files excluded from this particular rule's scope.
+Scope selects the **source files**, not the target search space. A target may resolve anywhere in the available index, including a file excluded from this rule's source scope.
 
-- `missing`: the target file or name cannot be resolved in the available index.
+- `missing`: the target cannot be resolved in the available index. This is not proof that the target is absent from disk; index exclusions can hide existing targets.
 - `missing_fragment`: the target file resolves, but its referenced heading or block does not.
 - `ambiguous`: the target matches multiple candidates and cannot be resolved uniquely.
 - `resolved` and `external` links never produce findings from this check.
-- When `includeEmbeds` is `true`, inspect embeds as well as ordinary links, including indexed image references. When it is `false`, ignore occurrences marked as embeds.
-- Include the source occurrence's line when available. If only the source file is known, emit a file-level diagnostic without inventing a line.
+- When `includeEmbeds` is `true`, inspect embeds as well as ordinary links, including indexed image references. When it is `false`, ignore embed occurrences and inspect ordinary links only.
+- Include the occurrence's one-based source line only when indexed; otherwise omit it. Do not invent a line.
 
-A `missing` status means unresolved **in the index**, not proof that the target is absent from disk. Index exclusions can hide existing targets. Diagnostics must retain that distinction; known indexing limitations must not be presented as confirmed nonexistent files.
+Messages identify the unresolved condition (missing target, missing fragment, or ambiguity) and include the raw target. For `missing`, for example:
+
+> Internal link `missingNote` could not be resolved in the indexed vault.
 
 ### Options
 
@@ -242,4 +249,4 @@ A `missing` status means unresolved **in the index**, not proof that the target 
 }
 ```
 
-For an unresolved `[[missingNote]]` occurrence, the message is `Internal link \`missingNote\` could not be resolved in the indexed vault.` For the other statuses, explain the missing fragment or ambiguity explicitly and include the raw target. Repeated occurrences can have separate diagnostics and source lines.
+Messages for the other statuses identify the missing fragment or ambiguity explicitly and include the raw target. Repeated occurrences can have separate diagnostics and source lines.
