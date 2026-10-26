@@ -98,6 +98,164 @@ def test_first_run_indexes_directories_notes_tags_and_parent_links(
     assert_foreign_keys_are_valid(database)
 
 
+def test_first_run_persists_filesystem_device_and_stat_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("---\ntags: stable/tag\n---\n# Stable\n", encoding="utf-8")
+    attachment = vault / "image.png"
+    attachment.write_bytes(b"image")
+    database = tmp_path / "index.db"
+
+    run_indexer(vault, database, monkeypatch)
+
+    for path in (note, attachment):
+        stat = path.stat()
+        assert rows(
+            database,
+            "SELECT st_dev, inode, mtime_ns FROM vault_files WHERE path = ?",
+            (str(path),),
+        ) == [(stat.st_dev, stat.st_ino, stat.st_mtime_ns)]
+
+
+def test_matching_legacy_metadata_backfills_device_without_reindexing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("---\ntags: stable/tag\n---\n# Stable\n\n[[Missing]]\n", encoding="utf-8")
+    database = tmp_path / "index.db"
+    run_indexer(vault, database, monkeypatch)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE vault_files SET st_dev = NULL")
+    before = database_snapshot(database)
+
+    def fail_parse(self: indexer.MarkdownTreeParser, source: str) -> dict:
+        raise AssertionError("matching legacy rows must be backfilled without parsing")
+
+    monkeypatch.setattr(indexer.MarkdownTreeParser, "parse", fail_parse)
+    run_indexer(vault, database, monkeypatch)
+
+    actual = database_snapshot(database)
+    expected = before["vault_files"][0]
+    assert actual["vault_files"][0][:4] + (None,) + actual["vault_files"][0][5:] == expected
+    assert actual["vault_files"][0][4] == note.stat().st_dev
+    for table in TABLES:
+        if table != "vault_files":
+            assert actual[table] == before[table]
+
+
+def test_unavailable_legacy_path_stat_preserves_failure_and_unknown_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Stable\n", encoding="utf-8")
+    database = tmp_path / "index.db"
+    run_indexer(vault, database, monkeypatch)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE vault_files SET st_dev = NULL")
+    original_stat = Path.stat
+
+    def fail_target_stat(path: Path, *args, **kwargs):
+        if path == note:
+            raise PermissionError("stat denied")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_target_stat)
+    with pytest.raises(PermissionError, match="stat denied"):
+        run_indexer(vault, database, monkeypatch)
+
+    assert rows(database, "SELECT st_dev FROM vault_files WHERE path = ?", (str(note),)) == [(None,)]
+
+
+def test_legacy_device_backfill_skips_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Stable\n", encoding="utf-8")
+    database = tmp_path / "index.db"
+    run_indexer(vault, database, monkeypatch)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE vault_files SET st_dev = NULL")
+
+    def fail_stat(path: Path, *args, **kwargs):
+        raise PermissionError("auxiliary stat denied")
+
+    monkeypatch.setattr(Path, "stat", fail_stat)
+    with sqlite3.connect(database) as connection:
+        indexer.backfill_legacy_file_devices(connection.cursor())
+    assert rows(database, "SELECT st_dev FROM vault_files WHERE path = ?", (str(note),)) == [(None,)]
+
+
+def test_inode_mismatch_does_not_backfill_or_reclassify_same_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Stable\n", encoding="utf-8")
+    database = tmp_path / "index.db"
+    run_indexer(vault, database, monkeypatch)
+    actual_inode = note.stat().st_ino
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE vault_files SET st_dev = NULL, inode = ? WHERE path = ?",
+            (actual_inode + 1, str(note)),
+        )
+
+    run_indexer(vault, database, monkeypatch)
+
+    assert rows(database, "SELECT st_dev, inode FROM vault_files WHERE path = ?", (str(note),)) == [
+        (None, actual_inode + 1)
+    ]
+
+
+def test_mtime_mismatch_uses_normal_reindex_and_refreshes_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Stable\n", encoding="utf-8")
+    database = tmp_path / "index.db"
+    run_indexer(vault, database, monkeypatch)
+    stat = note.stat()
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE vault_files SET st_dev = NULL, mtime_ns = ? WHERE path = ?",
+            (stat.st_mtime_ns + 1, str(note)),
+        )
+
+    run_indexer(vault, database, monkeypatch)
+
+    assert rows(database, "SELECT st_dev, inode, mtime_ns FROM vault_files WHERE path = ?", (str(note),)) == [
+        (stat.st_dev, stat.st_ino, stat.st_mtime_ns)
+    ]
+
+
+def test_missing_legacy_path_is_deleted_not_backfilled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Stable\n", encoding="utf-8")
+    database = tmp_path / "index.db"
+    run_indexer(vault, database, monkeypatch)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE vault_files SET st_dev = NULL")
+    note.unlink()
+
+    run_indexer(vault, database, monkeypatch)
+
+    assert rows(database, "SELECT path FROM vault_files") == []
+
+
 def test_first_run_stores_full_file_frontmatter_line_coordinates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

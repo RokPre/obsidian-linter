@@ -23,8 +23,16 @@ def test_initialize_database_creates_schema_and_preserves_existing_rows(tmp_path
 
         indexer.initialize_database(cursor)
 
-        assert cursor.execute("SELECT path, mtime_ns FROM vault_files").fetchall() == [
-            ("/vault/note.md", 123)
+        columns = {column[1]: column for column in cursor.execute("PRAGMA table_info(vault_files)")}
+        assert "st_dev" in columns
+        assert columns["st_dev"][3] == 0
+        assert cursor.execute("SELECT id, path, mtime_ns, st_dev FROM vault_files").fetchall() == [
+            (1, "/vault/note.md", 123, None)
+        ]
+
+        indexer.initialize_database(cursor)
+        assert cursor.execute("SELECT id, path, mtime_ns, st_dev FROM vault_files").fetchall() == [
+            (1, "/vault/note.md", 123, None)
         ]
 
 
@@ -146,7 +154,16 @@ def test_initialize_database_adds_mtime_to_legacy_notes(tmp_path) -> None:
 
         indexer.initialize_database(cursor)
 
-        assert cursor.execute("SELECT mtime_ns FROM vault_files").fetchall() == [(0,)]
+        columns = {column[1]: column for column in cursor.execute("PRAGMA table_info(vault_files)")}
+        assert "st_dev" in columns
+        assert columns["st_dev"][3] == 0
+        assert cursor.execute("SELECT id, path, inode, mtime_ns, st_dev FROM vault_files").fetchall() == [
+            (1, "/vault/note.md", 2, 0, None)
+        ]
+        indexer.initialize_database(cursor)
+        assert cursor.execute("SELECT id, path, inode, mtime_ns, st_dev FROM vault_files").fetchall() == [
+            (1, "/vault/note.md", 2, 0, None)
+        ]
 
 
 def test_initialize_database_reindexes_markdown_for_fenced_code_provenance(tmp_path) -> None:

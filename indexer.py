@@ -23,6 +23,7 @@ class ParsedFrontmatter:
 @dataclass(slots=True)
 class ParsedFile:
     path: Path
+    st_dev: int
     inode: int
     mtime_ns: int
     kind: str
@@ -172,6 +173,7 @@ def initialize_database(cursor: sqlite3.Cursor) -> None:
             directory_id INTEGER NOT NULL REFERENCES vault_directories(id) ON DELETE CASCADE,
             path TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
+            st_dev INTEGER,
             inode INTEGER NOT NULL,
             mtime_ns INTEGER NOT NULL,
             extension TEXT NOT NULL,
@@ -356,6 +358,8 @@ def initialize_database(cursor: sqlite3.Cursor) -> None:
     cursor.execute("INSERT OR IGNORE INTO vault_index_state (id, derived_data_dirty) VALUES (1, 0)")
 
     note_columns = {column[1] for column in cursor.execute("PRAGMA table_info(vault_files)")}
+    if "st_dev" not in note_columns:
+        cursor.execute("ALTER TABLE vault_files ADD COLUMN st_dev INTEGER")
     if "mtime_ns" not in note_columns:
         cursor.execute("ALTER TABLE vault_files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0")
 
@@ -985,7 +989,7 @@ def parse_file(path: Path, markdown_parser: MarkdownTreeParser) -> ParsedFile:
     file_stat = path.stat()
     suffix = path.suffix.lower()
     kind = "excalidraw" if path.name.lower().endswith("excalidraw.md") else FILE_KIND_BY_EXTENSION.get(suffix, "other")
-    parsed = ParsedFile(path, file_stat.st_ino, file_stat.st_mtime_ns, kind)
+    parsed = ParsedFile(path, file_stat.st_dev, file_stat.st_ino, file_stat.st_mtime_ns, kind)
     if kind != "markdown":
         return parsed
 
@@ -1018,23 +1022,52 @@ def parse_file(path: Path, markdown_parser: MarkdownTreeParser) -> ParsedFile:
     return parsed
 
 
+def backfill_legacy_file_devices(cursor: sqlite3.Cursor) -> None:
+    """Persist device identity for legacy rows whose path metadata still matches."""
+    legacy_rows = cursor.execute(
+        "SELECT path, inode, mtime_ns FROM vault_files WHERE st_dev IS NULL"
+    ).fetchall()
+    for path_string, inode, mtime_ns in legacy_rows:
+        try:
+            file_stat = Path(path_string).stat()
+        except OSError:
+            continue
+        if file_stat.st_ino == inode and file_stat.st_mtime_ns == mtime_ns:
+            cursor.execute(
+                """
+                UPDATE vault_files SET st_dev = ?
+                WHERE path = ? AND st_dev IS NULL AND inode = ? AND mtime_ns = ?
+                """,
+                (file_stat.st_dev, path_string, inode, mtime_ns),
+            )
+
+
 def insert_file(cursor: sqlite3.Cursor, parsed: ParsedFile, directory_id: int) -> int:
     """Replace one file's indexed rows in the caller's transaction."""
-    path = parsed.path
     cursor.execute(
         """
-        INSERT INTO vault_files (directory_id, path, name, inode, mtime_ns, extension, kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO vault_files (directory_id, path, name, st_dev, inode, mtime_ns, extension, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             directory_id = excluded.directory_id,
             name = excluded.name,
+            st_dev = excluded.st_dev,
             inode = excluded.inode,
             mtime_ns = excluded.mtime_ns,
             extension = excluded.extension,
             kind = excluded.kind
         RETURNING id
         """,
-        (directory_id, str(path), path.stem, parsed.inode, parsed.mtime_ns, path.suffix.lower(), parsed.kind),
+        (
+            directory_id,
+            str(parsed.path),
+            parsed.path.stem,
+            parsed.st_dev,
+            parsed.inode,
+            parsed.mtime_ns,
+            parsed.path.suffix.lower(),
+            parsed.kind,
+        ),
     )
     file_id = cursor.fetchone()[0]
     started = perf_counter()
@@ -1315,6 +1348,7 @@ def main():
             )
 
             changed_directories, changed_files = find_changes(cursor, vault_path)
+            backfill_legacy_file_devices(cursor)
 
             directories_to_insert = [
                 Path(path_string) for action, path_string in changed_directories if action in ("created", "modified")
