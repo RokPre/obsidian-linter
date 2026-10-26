@@ -3,6 +3,7 @@
 This document is the authoritative version 1 reference for the JSON rule format and the three checks available in the Obsidian plugin. To configure a rules file, see the [JSON rules guide](docs/json-rules.md). The root [rules.example.json](rules.example.json) is a complete example configuration.
 
 A **check** names a validation, and a **rule** configures one use of a check: which indexed files it applies to, which options it uses, and how its findings are reported. The settings action **Run checks** executes enabled rules manually. **Read/Validate** validates the whole configuration and matches rule scopes against indexed files only; it does not execute checks or produce findings.
+The root [rules.example.json](rules.example.json) contains a complete, single-rule configuration accepted by the current reader. For setup, see the [JSON rules guide](docs/json-rules.md).
 
 ## Configuration format
 
@@ -95,11 +96,12 @@ Each rule applies only to indexed files whose kind matches and whose vault-relat
 
 Run checks requires an existing persisted index with `vault_index_state.derived_data_dirty === 0`. It does not start indexing or fall back to indexing. If the index is absent or its derived data is dirty, the run fails and directs the user to **Index vault**. A ready index is a snapshot and may not reflect filesystem changes that have not been indexed. Running and matching checks currently require Obsidian desktop; unsupported adapters are reported as errors.
 
-Each finding is logged as a structured diagnostic with `ruleId`, `check`, configured `severity`, vault-relative `path`, and a human-readable `message`. A one-based `line` is included only when meaningful indexed source-line data exists; file-level findings and occurrences without an indexed line omit it. Lines are never invented. Failures are logged separately from diagnostics. Index-read/readiness errors fail the run as a whole; a rule-level failure is not a finding and does not stop other rules. A run with any rule failure is partial/failed, never clean. The console summary reports finding and failure counts and distinguishes an empty successful run from failures. Exact object serialization and summary wording are not contractual. No results window or sidebar is opened.
+Each finding is logged as a structured diagnostic with `ruleId`, `check`, configured `severity`, vault-relative `path`, and a human-readable `message`. A one-based `line` is included only when meaningful indexed source-line data exists; file-level findings and occurrences without an indexed line omit it. Lines are never invented. Failures are logged separately from diagnostics. Index-read/readiness errors fail the run as a whole; a rule-level failure is not a finding and does not stop other rules. A run with any rule failure is partial/failed, never clean. The console summary reports finding and failure counts and distinguishes an empty successful run from failures. The exact object serialization and summary wording are not contractual. No results window or sidebar is opened.
 
 JSON defines the canonical rule configuration. Existing long-term plans for a node-based editor or shared visual workflow are separate from these three implemented checks; this format contains no visual layout, execution branches, dependencies, or automatic fixes.
 
 ## 1. Required frontmatter property
+
 
 **Check name:** `requiredFrontmatterProperty`
 
@@ -147,7 +149,7 @@ This is a rule object to place inside the configuration's `rules` array:
 }
 ```
 
-For `knowledge/cameraModel.md` without this property, the message states that the required frontmatter property `aliases` is missing. This is a file-level finding with no source line because the missing property has no existing location.
+For `knowledge/cameraModel.md` without this property, the message is `Required frontmatter property \`aliases\` is missing.` This file-level finding has no source line because the missing property has no existing location.
 
 ## 2. Filename case
 
@@ -207,7 +209,7 @@ For `knowledge/CameraModel.md`, the file-level finding has no source line. The m
 
 ### Behavior
 
-Inspect indexed link occurrences originating in enabled, in-scope Markdown source files, including links indexed from their frontmatter. Emit one diagnostic per matching occurrence, not one per distinct target. Repeated links to the same target therefore remain separate findings.
+Inspect indexed link occurrences originating in enabled, in-scope Markdown source files, including links indexed from frontmatter. Emit one diagnostic per matching occurrence, not one per distinct target. Repeated links to the same target therefore remain separate findings.
 
 Scope selects the **source files**, not the target search space. A target may resolve anywhere in the available index, including a file excluded from this rule's source scope.
 
@@ -218,9 +220,7 @@ Scope selects the **source files**, not the target search space. A target may re
 - When `includeEmbeds` is `true`, inspect embeds as well as ordinary links, including indexed image references. When it is `false`, ignore embed occurrences and inspect ordinary links only.
 - Include the occurrence's one-based source line only when indexed; otherwise omit it. Do not invent a line.
 
-Messages identify the unresolved condition (missing target, missing fragment, or ambiguity) and include the raw target. For `missing`, for example:
-
-> Internal link `missingNote` could not be resolved in the indexed vault.
+Messages identify the unresolved condition (missing target, missing fragment, or ambiguity) and include the raw target. For `missing`, the example message is `Internal link \`missingNote\` could not be resolved in the indexed vault.` Its wording reflects unresolved status in the available index, not confirmed absence on disk.
 
 ### Options
 
