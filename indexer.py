@@ -1,3 +1,5 @@
+import os
+import stat
 import argparse
 import json
 import re
@@ -23,6 +25,7 @@ class ParsedFrontmatter:
 @dataclass(slots=True)
 class ParsedFile:
     path: Path
+    st_dev: int
     inode: int
     mtime_ns: int
     kind: str
@@ -172,6 +175,7 @@ def initialize_database(cursor: sqlite3.Cursor) -> None:
             directory_id INTEGER NOT NULL REFERENCES vault_directories(id) ON DELETE CASCADE,
             path TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
+            st_dev INTEGER,
             inode INTEGER NOT NULL,
             mtime_ns INTEGER NOT NULL,
             extension TEXT NOT NULL,
@@ -356,6 +360,8 @@ def initialize_database(cursor: sqlite3.Cursor) -> None:
     cursor.execute("INSERT OR IGNORE INTO vault_index_state (id, derived_data_dirty) VALUES (1, 0)")
 
     note_columns = {column[1] for column in cursor.execute("PRAGMA table_info(vault_files)")}
+    if "st_dev" not in note_columns:
+        cursor.execute("ALTER TABLE vault_files ADD COLUMN st_dev INTEGER")
     if "mtime_ns" not in note_columns:
         cursor.execute("ALTER TABLE vault_files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0")
 
@@ -985,7 +991,7 @@ def parse_file(path: Path, markdown_parser: MarkdownTreeParser) -> ParsedFile:
     file_stat = path.stat()
     suffix = path.suffix.lower()
     kind = "excalidraw" if path.name.lower().endswith("excalidraw.md") else FILE_KIND_BY_EXTENSION.get(suffix, "other")
-    parsed = ParsedFile(path, file_stat.st_ino, file_stat.st_mtime_ns, kind)
+    parsed = ParsedFile(path, file_stat.st_dev, file_stat.st_ino, file_stat.st_mtime_ns, kind)
     if kind != "markdown":
         return parsed
 
@@ -1018,23 +1024,52 @@ def parse_file(path: Path, markdown_parser: MarkdownTreeParser) -> ParsedFile:
     return parsed
 
 
+def backfill_legacy_file_devices(cursor: sqlite3.Cursor) -> None:
+    """Persist device identity for legacy rows whose path metadata still matches."""
+    legacy_rows = cursor.execute(
+        "SELECT path, inode, mtime_ns FROM vault_files WHERE st_dev IS NULL"
+    ).fetchall()
+    for path_string, inode, mtime_ns in legacy_rows:
+        try:
+            file_stat = Path(path_string).stat()
+        except OSError:
+            continue
+        if file_stat.st_ino == inode and file_stat.st_mtime_ns == mtime_ns:
+            cursor.execute(
+                """
+                UPDATE vault_files SET st_dev = ?
+                WHERE path = ? AND st_dev IS NULL AND inode = ? AND mtime_ns = ?
+                """,
+                (file_stat.st_dev, path_string, inode, mtime_ns),
+            )
+
+
 def insert_file(cursor: sqlite3.Cursor, parsed: ParsedFile, directory_id: int) -> int:
     """Replace one file's indexed rows in the caller's transaction."""
-    path = parsed.path
     cursor.execute(
         """
-        INSERT INTO vault_files (directory_id, path, name, inode, mtime_ns, extension, kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO vault_files (directory_id, path, name, st_dev, inode, mtime_ns, extension, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             directory_id = excluded.directory_id,
             name = excluded.name,
+            st_dev = excluded.st_dev,
             inode = excluded.inode,
             mtime_ns = excluded.mtime_ns,
             extension = excluded.extension,
             kind = excluded.kind
         RETURNING id
         """,
-        (directory_id, str(path), path.stem, parsed.inode, parsed.mtime_ns, path.suffix.lower(), parsed.kind),
+        (
+            directory_id,
+            str(parsed.path),
+            parsed.path.stem,
+            parsed.st_dev,
+            parsed.inode,
+            parsed.mtime_ns,
+            parsed.path.suffix.lower(),
+            parsed.kind,
+        ),
     )
     file_id = cursor.fetchone()[0]
     started = perf_counter()
@@ -1271,6 +1306,122 @@ def resolve_vault_links(cursor: sqlite3.Cursor, vault_path: Path) -> None:
     )
 
 
+def move_path_kind(path: str) -> str:
+    """Return the file kind determined by the path alone."""
+    candidate = Path(path)
+    if candidate.name.lower().endswith("excalidraw.md"):
+        return "excalidraw"
+    return FILE_KIND_BY_EXTENSION.get(candidate.suffix.lower(), "other")
+
+
+def move_kind_is_compatible(old_path: str, new_path: str, old_kind: str) -> bool:
+    """Allow moves whose indexed kind remains compatible with both paths."""
+    old_path_kind = move_path_kind(old_path)
+    new_path_kind = move_path_kind(new_path)
+    old_kind_matches_path = old_kind == old_path_kind or (
+        old_path_kind == "markdown" and old_kind == "excalidraw"
+    )
+    return old_kind_matches_path and (
+        new_path_kind == old_kind
+        or (old_path_kind == new_path_kind == "markdown" and old_kind == "excalidraw")
+    )
+
+
+def pair_unchanged_file_moves(
+    cursor: sqlite3.Cursor,
+    file_changes: list[tuple[str, str]],
+) -> list[tuple[str, str, tuple[int, int, int, int, str]]]:
+    """Find unique regular-file moves whose destination metadata can be refreshed in place."""
+    deleted = {path for action, path in file_changes if action == "deleted"}
+    created = [path for action, path in file_changes if action == "created"]
+    if not deleted or not created:
+        return []
+
+    deleted_rows: dict[tuple[int, int], list[tuple[str, tuple[int, int, int, int, str]]]] = {}
+    for path, file_id, st_dev, inode, mtime_ns, kind in cursor.execute(
+        "SELECT path, id, st_dev, inode, mtime_ns, kind FROM vault_files"
+    ):
+        if path in deleted and st_dev is not None:
+            deleted_rows.setdefault((st_dev, inode), []).append((path, (file_id, mtime_ns, st_dev, inode, kind)))
+
+    created_rows: dict[tuple[int, int], list[tuple[str, os.stat_result]]] = {}
+    for path_string in created:
+        path = Path(path_string)
+        try:
+            file_stat = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(file_stat.st_mode):
+            created_rows.setdefault((file_stat.st_dev, file_stat.st_ino), []).append((path_string, file_stat))
+
+    moves: list[tuple[str, str, tuple[int, int, int, int, str]]] = []
+    for identity, old_candidates in deleted_rows.items():
+        new_candidates = created_rows.get(identity, [])
+        if len(old_candidates) != 1 or len(new_candidates) != 1:
+            continue
+        old_path, old_row = old_candidates[0]
+        new_path, new_stat = new_candidates[0]
+        file_id, old_mtime_ns, st_dev, inode, old_kind = old_row
+        if new_stat.st_mtime_ns == old_mtime_ns and move_kind_is_compatible(old_path, new_path, old_kind):
+            moves.append((old_path, new_path, (file_id, old_mtime_ns, st_dev, inode, old_kind)))
+    return moves
+
+
+def final_move_stat_matches(
+    old_path: str, path_string: str, expected: tuple[int, int, int, int, str]
+) -> bool:
+    """Revalidate a move candidate immediately before its database update."""
+    _file_id, mtime_ns, st_dev, inode, expected_kind = expected
+    try:
+        file_stat = Path(path_string).lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(file_stat.st_mode)
+        and file_stat.st_dev == st_dev
+        and file_stat.st_ino == inode
+        and file_stat.st_mtime_ns == mtime_ns
+        and move_kind_is_compatible(old_path, path_string, expected_kind)
+    )
+
+
+def apply_file_move(
+    cursor: sqlite3.Cursor, old_path: str, new_path: str, expected: tuple[int, int, int, int, str]
+) -> bool:
+    """Update a uniquely matched file row in place after final stat validation."""
+    if not final_move_stat_matches(old_path, new_path, expected):
+        return False
+    file_id = expected[0]
+    directory = cursor.execute("SELECT id FROM vault_directories WHERE path = ?", (str(Path(new_path).parent),)).fetchone()
+    if directory is None:
+        return False
+    cursor.execute(
+        """
+        UPDATE vault_files
+        SET path = ?, name = ?, directory_id = ?, st_dev = ?, inode = ?, mtime_ns = ?,
+            extension = ?, kind = ?
+        WHERE id = ? AND path = ? AND mtime_ns = ? AND st_dev = ? AND inode = ? AND kind = ?
+        """,
+        (
+            new_path,
+            Path(new_path).stem,
+            directory[0],
+            expected[2],
+            expected[3],
+            expected[1],
+            Path(new_path).suffix.lower(),
+            expected[4],
+            file_id,
+            old_path,
+            expected[1],
+            expected[2],
+            expected[3],
+            expected[4],
+        ),
+    )
+    return cursor.rowcount == 1
+
+
 def parse_args() -> tuple[Path, Path]:
     parser = argparse.ArgumentParser(description="Parse a vault into a SQLite database.")
 
@@ -1315,7 +1466,8 @@ def main():
             )
 
             changed_directories, changed_files = find_changes(cursor, vault_path)
-
+            backfill_legacy_file_devices(cursor)
+            move_candidates = pair_unchanged_file_moves(cursor, changed_files)
             directories_to_insert = [
                 Path(path_string) for action, path_string in changed_directories if action in ("created", "modified")
             ]
@@ -1362,6 +1514,17 @@ def main():
                     """,
                     (str(directory), directory.stat().st_ino, parent_id),
                 )
+            applied_moves: list[tuple[str, str]] = []
+            for old_path, new_path, expected in move_candidates:
+                if apply_file_move(cursor, old_path, new_path, expected):
+                    applied_moves.append((old_path, new_path))
+                    # Moved files retain their existing tag occurrences.
+            if applied_moves:
+                moved_old_paths = {old for old, _new in applied_moves}
+                moved_new_paths = {new for _old, new in applied_moves}
+                files_to_index = [path for path in files_to_index if str(path) not in moved_new_paths]
+                file_paths_to_delete = [path for path in file_paths_to_delete if str(path) not in moved_old_paths]
+
 
             if files_to_index:
                 print(f"Indexing {len(files_to_index)} files", flush=True)
