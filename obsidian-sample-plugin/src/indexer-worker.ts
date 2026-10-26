@@ -1,12 +1,15 @@
 import {
 	getIndexedFilesForVault,
 	indexVault,
+	runChecksForVault,
 	setIgnoredPaths,
 	type IndexProgress,
 	type LinkResolution,
 	type LinkTargetQuery,
 	type ResolveLinkTargets,
+	type RunChecksResult,
 } from './indexer';
+import type { RulesConfig } from './rules-config';
 
 interface IndexRequest {
 	id: number;
@@ -24,8 +27,17 @@ interface IndexedFilesRequest {
 	configDir: string;
 }
 
+interface RunChecksRequest {
+	id: number;
+	type: 'run-checks';
+	vaultPath: string;
+	configDir: string;
+	config: RulesConfig;
+}
+
 type WorkerMessage = IndexRequest
 	| IndexedFilesRequest
+	| RunChecksRequest
 	| { id: number; type: 'resolve-links-result'; resolution: LinkResolution }
 	| { id: number; type: 'resolve-links-error'; error: string };
 
@@ -38,6 +50,10 @@ self.onmessage = ({ data: message }: MessageEvent<WorkerMessage>) => {
 	if ('type' in message) {
 		if (message.type === 'get-indexed-files') {
 			void runGetIndexedFilesRequest(message);
+			return;
+		}
+		if (message.type === 'run-checks') {
+			void runRunChecksRequest(message);
 			return;
 		}
 		const pending = pendingResolutions.get(message.id);
@@ -88,5 +104,14 @@ async function runGetIndexedFilesRequest(request: IndexedFilesRequest): Promise<
 			id: request.id,
 			error: error instanceof Error ? error.message : String(error),
 		});
+	}
+}
+
+async function runRunChecksRequest(request: RunChecksRequest): Promise<void> {
+	try {
+		const result: RunChecksResult = await runChecksForVault(request.vaultPath, request.configDir, request.config);
+		self.postMessage({ id: request.id, type: 'run-checks-result', result });
+	} catch (error) {
+		self.postMessage({ id: request.id, error: error instanceof Error ? error.message : String(error) });
 	}
 }

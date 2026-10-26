@@ -65,7 +65,9 @@ class Setting {
 			buttonEl: { classList: { add() {} } },
 			onClick(callback) { this.click = callback; return this; },
 		};
-		this.button = button;
+		this.buttons ??= [];
+		this.buttons.push(button);
+		this.button ??= button;
 		configure(button);
 		return this;
 	}
@@ -179,7 +181,9 @@ await test('real plugin lifecycle is manual-only outside explicit Read/Validate'
 
 	plugin.settingTab.display();
 	assertNoRulesFlow('settings display');
-	assert.equal(settings.find((setting) => setting.name === 'Rules JSON file')?.button?.label, 'Read/Validate');
+	const rulesSetting = settings.find((setting) => setting.name === 'Rules JSON file');
+	assert.deepEqual(rulesSetting.buttons.map((button) => button.label), ['Read/Validate', 'Run checks']);
+	assert.equal(rulesSetting.button, rulesSetting.buttons[0], 'the first button remains Read/Validate');
 
 	layoutReady();
 	assert.equal(eventCallbacks.size, 4, 'layout-ready registers all four existing vault indexing events');
@@ -195,7 +199,9 @@ await test('real plugin lifecycle is manual-only outside explicit Read/Validate'
 
 	const beforeClickIndexCalls = indexerClientCalls;
 	const beforeClickIndexes = counters.indexes;
-	await settings.find((setting) => setting.name === 'Rules JSON file').button.click();
+	const beforeClickWorkerMessages = workers[0].messages.length;
+	await rulesSetting.buttons.find((button) => button.label === 'Read/Validate').click();
+	assert.deepEqual(workers[0].messages.slice(beforeClickWorkerMessages).map((message) => message.type), ['get-indexed-files'], 'validation does not request run-checks');
 	assert.equal(counters.reads, 1, 'explicit click reads the configured vault file');
 	assert.equal(counters.parses, 1, 'explicit click invokes the actual JRC-01 parser wrapper');
 	assert.equal(counters.projections, 1, 'explicit click crosses the real IndexerClient projection request boundary');
