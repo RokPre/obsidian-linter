@@ -2,7 +2,7 @@
 
 This document is the authoritative version 1 reference for the JSON rule format and the three checks available in the Obsidian plugin. To configure a rules file, see the [JSON rules guide](docs/json-rules.md). The root [rules.example.json](rules.example.json) is a complete example configuration.
 
-A **check** names a validation, and a **rule** configures one use of a check: which indexed files it applies to, which options it uses, and how its findings are reported. The settings action **Run checks** executes enabled rules manually. **Read/Validate** validates the whole configuration and matches rule scopes against indexed files only; it does not execute checks or produce findings.
+A **check** names a validation, and a **rule** configures one use of a check: which indexed files it applies to, which options it uses, and how its findings are reported. The settings action **Run checks** executes enabled rules manually. **Read/validate** validates the whole configuration and matches rule scopes against indexed files only; it does not execute checks or produce findings.
 The root [rules.example.json](rules.example.json) contains a complete, single-rule configuration accepted by the current reader. For setup, see the [JSON rules guide](docs/json-rules.md).
 
 ## Configuration format

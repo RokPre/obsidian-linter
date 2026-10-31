@@ -1493,7 +1493,7 @@ test('does not path-follow a destination that reappears as a symlink after recon
   });
   const database = join(workRoot, 'file-move-vanished-symlink-reappearance.db');
   await indexVault(vault, database);
-  const before = rawSnapshot(database);
+
   const oldPath = join(vault, 'old', 'Vanished.md');
   const destination = join(vault, 'Vanished.md');
   const markerPath = join(workRoot, 'vanished-symlink-external-marker.md');
@@ -1596,7 +1596,7 @@ test('does not read an external symlink installed before the first candidate lst
   });
   const database = join(workRoot, 'file-move-symlink-first-candidate-lstat.db');
   await indexVault(vault, database);
-  const before = rawSnapshot(database);
+
   const oldPath = join(vault, 'old', 'Race.md');
   const destination = join(vault, 'Race.md');
   const replacement = join(workRoot, 'race-first-candidate-marker.md');
@@ -2435,7 +2435,7 @@ test('uses the vault-local default database path and preserves migration rows', 
   execFileSync(PYTHON, ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("ALTER TABLE vault_files DROP COLUMN mtime_ns"); c.commit()', legacyTypescript]);
   oracle(vault, legacyPython);
   await indexVault(vault, legacyTypescript);
-  const legacyPythonFile = rawSnapshot(legacyPython).vault_files.rows.find(file => file.path === join(vault, 'legacy.md'));
+
   const legacyTypescriptFile = rawSnapshot(legacyTypescript).vault_files.rows.find(file => file.path === join(vault, 'legacy.md'));
   assert.equal(BigInt(legacyTypescriptFile?.device), (await stat(join(vault, 'legacy.md'), { bigint: true })).dev,
     'legacy TypeScript row must be reparsed and store the current filesystem device');

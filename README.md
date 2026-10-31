@@ -26,7 +26,7 @@ The index contains information about notes, directories, frontmatter, Markdown s
 
 ## Health Checker
 
-The health checker supports version 1 rules from a JSON file. In plugin settings, configure a vault-relative path and choose **Read/Validate** to validate the complete configuration and match rule scopes against indexed files, or choose **Run checks** to manually execute enabled rules and log findings.
+The health checker supports version 1 rules from a JSON file. In plugin settings, configure a vault-relative path and choose **Read/validate** to validate the complete configuration and match rule scopes against indexed files, or choose **Run checks** to manually execute enabled rules and log findings.
 
 Runs require an existing persisted index whose derived data is ready; **Run checks** does not index the vault. Index-readiness or rule-execution failures are reported separately from findings. Results are logged to the console; the plugin does not open a findings window or sidebar.
 

@@ -165,7 +165,7 @@ function assertNoRulesFlow(stage) {
 	assert.deepEqual(counters, { reads: 0, parses: 0, matches: 0, projections: 0, indexes: counters.indexes }, `${stage}: rules processing must not run`);
 }
 
-await test('real plugin lifecycle is manual-only outside explicit Read/Validate', async () => {
+await test('real plugin lifecycle is manual-only outside explicit Read/validate', async () => {
 	const plugin = new ObsidianLinterPlugin(app, { id: 'test-plugin', dir: '.obsidian/plugins/test-plugin' });
 	await plugin.onload();
 	let indexerClientCalls = 0;
@@ -182,8 +182,8 @@ await test('real plugin lifecycle is manual-only outside explicit Read/Validate'
 	plugin.settingTab.display();
 	assertNoRulesFlow('settings display');
 	const rulesSetting = settings.find((setting) => setting.name === 'Rules JSON file');
-	assert.deepEqual(rulesSetting.buttons.map((button) => button.label), ['Read/Validate', 'Run checks']);
-	assert.equal(rulesSetting.button, rulesSetting.buttons[0], 'the first button remains Read/Validate');
+	assert.deepEqual(rulesSetting.buttons.map((button) => button.label), ['Read/validate', 'Run checks']);
+	assert.equal(rulesSetting.button, rulesSetting.buttons[0], 'the first button remains Read/validate');
 
 	layoutReady();
 	assert.equal(eventCallbacks.size, 4, 'layout-ready registers all four existing vault indexing events');
@@ -200,7 +200,7 @@ await test('real plugin lifecycle is manual-only outside explicit Read/Validate'
 	const beforeClickIndexCalls = indexerClientCalls;
 	const beforeClickIndexes = counters.indexes;
 	const beforeClickWorkerMessages = workers[0].messages.length;
-	await rulesSetting.buttons.find((button) => button.label === 'Read/Validate').click();
+	await rulesSetting.buttons.find((button) => button.label === 'Read/validate').click();
 	assert.deepEqual(workers[0].messages.slice(beforeClickWorkerMessages).map((message) => message.type), ['get-indexed-files'], 'validation does not request run-checks');
 	assert.equal(counters.reads, 1, 'explicit click reads the configured vault file');
 	assert.equal(counters.parses, 1, 'explicit click invokes the actual JRC-01 parser wrapper');

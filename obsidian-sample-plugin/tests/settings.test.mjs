@@ -264,7 +264,7 @@ test('declarative settings define a searchable ignored-path editor', async () =>
 		assert.equal(typeof definition.render, 'function');
 		assert.ok(ui.renderRoot.children.length > 0);
 		assert.equal(ui.pickers.length, 1);
-		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault', 'Read/Validate', 'Run checks']);
+		assert.deepEqual(ui.buttons.map(button => button.label), ['Add', 'Clear', 'Save', 'Index vault', 'Read/validate', 'Run checks']);
 		assert.equal(ui.descriptions[0], definition.desc);
 		assert.equal(ui.buttons.find(button => button.label === 'Save').disabled, true);
 		assert.deepEqual(ui.saveRequests, []);
@@ -824,7 +824,7 @@ test('rules path defaults empty, persists, reloads, and uses loaded-vault sugges
 		const ui = await settingsTab(vault);
 		assert.equal(ui.defaults.rulesFilePath, '');
 		assert.equal(ui.rulesInput?.inputEl.value, '');
-		assert.equal(ui.rulesSetting?.button.label, 'Read/Validate');
+		assert.equal(ui.rulesSetting?.button.label, 'Read/validate');
 
 		const suggestion = ui.suggestions.at(-1);
 		assert.deepEqual(suggestion.getSuggestions('settings/rules'), ['settings/rules.json']);
@@ -844,7 +844,7 @@ test('rules path defaults empty, persists, reloads, and uses loaded-vault sugges
 	}
 });
 
-test('Read/Validate manually matches only the current indexed-file projection', async () => {
+test('Read/validate manually matches only the current indexed-file projection', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-read-'));
 	const rulesFilePath = 'settings/rules.json';
 	const rulesSource = JSON.stringify({
@@ -875,7 +875,7 @@ test('Read/Validate manually matches only the current indexed-file projection', 
 		assert.deepEqual(ui.vaultReads, [{ vaultPath: vault, path: rulesFilePath }]);
 		assert.deepEqual(ui.parseRequests, [rulesSource]);
 		assert.deepEqual(ui.indexedFileRequests, [[vault, 'custom-config']]);
-		assert.deepEqual(ui.indexRequests, [], 'Read/Validate must not start a reindex');
+		assert.deepEqual(ui.indexRequests, [], 'Read/validate must not start a reindex');
 		assert.deepEqual(JSON.parse(JSON.stringify(ui.matchRequests[0].files)), indexedFiles);
 		assert.deepEqual(JSON.parse(JSON.stringify(ui.matchRequests[0].matches)), [{
 			ruleId: 'filename-case',
@@ -883,13 +883,13 @@ test('Read/Validate manually matches only the current indexed-file projection', 
 		}]);
 		assert.equal(JSON.stringify(ui.matchRequests[0].matches).includes('notIndexed.md'), false);
 		assert.equal(ui.runChecksRequests.length, 0);
-		assert.equal(ui.allConsoleCalls.length, 0, 'Read/Validate must not log execution findings or summaries');
+		assert.equal(ui.allConsoleCalls.length, 0, 'Read/validate must not log execution findings or summaries');
 		assert.equal(ui.notices[0].includes('camelNote.md'), false);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
 	}
 });
-test('Read/Validate disables while matching is pending and re-enables after success or error', async () => {
+test('Read/validate disables while matching is pending and re-enables after success or error', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-rules-button-state-'));
 	const rulesFilePath = 'settings/rules.json';
 	try {
@@ -1039,7 +1039,7 @@ test('Run checks executes only on explicit invocation and passes the full parsed
 		const ui = await settingsTab(vault, [], 'legacy', { rulesFilePath });
 		assert.deepEqual(ui.runChecksRequests, []);
 		await ui.readValidateButton.click();
-		assert.deepEqual(ui.runChecksRequests, [], 'Read/Validate must not execute checks');
+		assert.deepEqual(ui.runChecksRequests, [], 'Read/validate must not execute checks');
 		assert.deepEqual(ui.indexRequests, []);
 		await ui.runChecksButton.click();
 		assert.deepEqual(ui.vaultReads, [{ vaultPath: vault, path: rulesFilePath }, { vaultPath: vault, path: rulesFilePath }]);

@@ -276,7 +276,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 			})
 			.addButton((button) =>
 				button
-					.setButtonText('Read/Validate')
+					.setButtonText('Read/validate')
 					.onClick(async () => {
 						const rulesFilePath = this.plugin.settings.rulesFilePath;
 						if (rulesFilePath === '') {
