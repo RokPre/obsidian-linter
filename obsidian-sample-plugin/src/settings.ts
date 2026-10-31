@@ -338,13 +338,17 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 							for (const failure of result.failures) {
 								console.error('Rule check failure', failure);
 							}
+							this.plugin.setDiagnosticsOutcome({ status: 'completed', diagnostics: result.diagnostics });
 							console.warn('Rule checks completed', {
 								findings: result.diagnostics.length,
 								failures: result.failures.length,
 								status: result.failures.length === 0 ? 'clean' : 'partial',
 							});
 						} catch (error) {
-							const message = error instanceof Error ? error.message : String(error);
+							const message = error !== null && typeof error === 'object' && 'message' in error
+								? String(error.message)
+								: String(error);
+							this.plugin.setDiagnosticsOutcome({ status: 'failed', message });
 							console.error('Rule checks failed', error);
 							new Notice(`${rulesFilePath}: ${message}`);
 						} finally {

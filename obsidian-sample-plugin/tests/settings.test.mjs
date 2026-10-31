@@ -30,6 +30,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	const runChecksRequests = [];
 	const configRequests = [];
 	const saveRequests = [];
+	const diagnosticOutcomes = [];
 	const savedSettings = [];
 	const suggestions = [];
 	const vaultReads = [];
@@ -205,6 +206,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 			savedSettings.push({ ...settings, ignoredPaths: [...settings.ignoredPaths] });
 			Object.assign(this.settings, settings);
 		},
+		setDiagnosticsOutcome(outcome) { diagnosticOutcomes.push(outcome); },
 		indexerClient: {
 			getIndexedFiles(vaultPath, configDir) {
 				indexedFileRequests.push([vaultPath, configDir]);
@@ -236,7 +238,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	}
 	return {
 		settings, notices, errors, consoleLogs, allConsoleCalls, tab, plugin, buttons, indexRequests, runChecksRequests,
-		configRequests, saveRequests, savedSettings, suggestions, renderRoot, vaultReads, indexedFileRequests,
+		configRequests, saveRequests, savedSettings, suggestions, renderRoot, vaultReads, indexedFileRequests, diagnosticOutcomes,
 		parseRequests, matchRequests,
 		defaults: module.exports.DEFAULT_SETTINGS,
 		rulesSetting: settings.find(setting => setting.name === 'Rules JSON file'),
@@ -1095,6 +1097,7 @@ test('Run checks logs structured findings, separate failures, and distinct resul
 		assert.deepEqual(JSON.parse(JSON.stringify(ui.errors.filter(args => args[0] === 'Rule check failure').map(args => args[1]))), failures);
 		const summary = ui.consoleLogs.find(args => args[0] === 'Rule checks completed')?.[1];
 		assert.deepEqual(JSON.parse(JSON.stringify(summary)), { findings: 2, failures: 1, status: 'partial' });
+		assert.deepEqual(JSON.parse(JSON.stringify(ui.diagnosticOutcomes)), [{ status: 'completed', diagnostics }]);
 		assert.deepEqual(ui.indexRequests, []);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
@@ -1155,6 +1158,9 @@ test('Run checks reports read, adapter, and run errors and always re-enables wit
 		assert.match(runError.notices[0], /index is not ready; select Index vault/i);
 		assert.equal(runError.consoleLogs.some(args => args[0] === 'Rule checks completed'), false);
 		assert.equal(runError.errors.length, 1);
+		assert.deepEqual(JSON.parse(JSON.stringify(runError.diagnosticOutcomes)), [{
+			status: 'failed', message: 'index is not ready; select Index vault',
+		}]);
 		assert.deepEqual(runError.indexRequests, []);
 
 		const readError = await settingsTab(vault, [], 'legacy', { rulesFilePath: 'rules.json' });

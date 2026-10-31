@@ -15,6 +15,7 @@
 
 - [Plugin entry point](../obsidian-sample-plugin/src/main.ts)
 - [Settings and user actions](../obsidian-sample-plugin/src/settings.ts)
+- [Diagnostics sidebar view](../obsidian-sample-plugin/src/diagnostics-view.ts): retained Run checks outcomes, findings, and finding navigation.
 - [Indexing and database lifecycle](../obsidian-sample-plugin/src/indexer.ts)
 - [Indexer worker](../obsidian-sample-plugin/src/indexer-worker.ts)
 - [Rule configuration validation](../obsidian-sample-plugin/src/rules-config.ts)
