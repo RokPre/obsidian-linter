@@ -6,6 +6,16 @@ The plugin builds a structured SQLite index of the vault as the foundation for s
 
 The database is infrastructure rather than the product itself. Visual workflows connect folder inputs and filters to checks, then pass their results to tools that modify the selected content.
 
+## Project navigation
+
+See the [documentation and source index](docs/TOC.md) for the project guide, rule reference, and code entry points.
+
+## Main entry points
+
+- Active Obsidian plugin: [`obsidian-sample-plugin/src/main.ts`](obsidian-sample-plugin/src/main.ts) and its indexer in [`obsidian-sample-plugin/src/indexer.ts`](obsidian-sample-plugin/src/indexer.ts).
+- Rule configuration, validation, and execution: [`rules-config.ts`](obsidian-sample-plugin/src/rules-config.ts), [`rules-engine.ts`](obsidian-sample-plugin/src/rules-engine.ts), and [`settings.ts`](obsidian-sample-plugin/src/settings.ts).
+- Legacy Python indexing and related tools: [`indexer.py`](indexer.py), [`healthChecker.py`](healthChecker.py), and [`tests/`](tests/).
+
 ## Indexer
 
 The indexer creates a SQLite database containing a structured representation of the vault.
