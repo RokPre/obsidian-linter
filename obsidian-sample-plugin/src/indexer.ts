@@ -142,6 +142,7 @@ export function initialize_database(cursor: Cursor): void {
             path TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             inode INTEGER NOT NULL,
+            device INTEGER,
             mtime_ns INTEGER NOT NULL,
             extension TEXT NOT NULL,
             kind TEXT NOT NULL CHECK (
@@ -341,6 +342,9 @@ export function initialize_database(cursor: Cursor): void {
 			.fetchall()
 			.map((column) => String(column[1]!)),
 	);
+	if (!noteColumns.has("device")) {
+		cursor.execute("ALTER TABLE vault_files ADD COLUMN device INTEGER");
+	}
 	if (!noteColumns.has("mtime_ns")) {
 		cursor.execute("ALTER TABLE vault_files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0");
 	}
@@ -545,6 +549,7 @@ export interface ParsedFrontmatter {
 export interface ParsedFile {
 	path: string;
 	inode: bigint;
+	device: bigint;
 	mtime_ns: bigint;
 	kind: string;
 	frontmatter_source: string;
@@ -924,7 +929,7 @@ export function parse_file(filePath: string, markdown_parser: MarkdownTreeParser
 	const suffix = graph_python_suffix(filePath).toLowerCase();
 	const name = path.basename(filePath);
 	const kind = name.toLowerCase().endsWith("excalidraw.md") ? "excalidraw" : (FILE_KIND_BY_EXTENSION[suffix] ?? "other");
-	const parsed: ParsedFile = { path: filePath, inode: file_stat.ino, mtime_ns: file_stat.mtimeNs, kind, frontmatter_source: "", frontmatter_result: null, syntax_tree: null };
+	const parsed: ParsedFile = { path: filePath, inode: file_stat.ino, device: file_stat.dev, mtime_ns: file_stat.mtimeNs, kind, frontmatter_source: "", frontmatter_result: null, syntax_tree: null };
 	if (kind !== "markdown") return parsed;
 	let started = performance.now();
 	const source_bytes = fs.readFileSync(filePath);
@@ -960,8 +965,8 @@ export function insert_file(cursor: Cursor, parsed: ParsedFile, directory_id: nu
 	const extension = suffix === "." ? "" : suffix.toLowerCase();
 	const name = path.basename(filePath, extension === "" ? "" : suffix);
 	cursor.execute(
-		"INSERT INTO vault_files (directory_id, path, name, inode, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET directory_id = excluded.directory_id, name = excluded.name, inode = excluded.inode, mtime_ns = excluded.mtime_ns, extension = excluded.extension, kind = excluded.kind RETURNING id",
-		[directory_id, filePath, name, parsed.inode, parsed.mtime_ns, extension, parsed.kind],
+		"INSERT INTO vault_files (directory_id, path, name, inode, device, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET directory_id = excluded.directory_id, name = excluded.name, inode = excluded.inode, device = excluded.device, mtime_ns = excluded.mtime_ns, extension = excluded.extension, kind = excluded.kind RETURNING id",
+		[directory_id, filePath, name, parsed.inode, parsed.device, parsed.mtime_ns, extension, parsed.kind],
 	);
 	const row = cursor.fetchone();
 	if (row === null || row[0] === undefined || row[0] === null) throw new Error("Failed to insert vault file");

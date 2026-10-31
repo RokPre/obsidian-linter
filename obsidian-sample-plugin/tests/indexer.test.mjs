@@ -238,7 +238,7 @@ function key(value) {
   return JSON.stringify(value);
 }
 
-function semanticSnapshot(database) {
+function semanticSnapshot(database, excludeFileDevice = false) {
   const raw = rawSnapshot(database);
   assert.deepStrictEqual(Object.keys(raw).sort(), [...TABLES].sort(), 'database snapshot must include exactly every application table');
   const dirs = Object.create(null);
@@ -268,6 +268,10 @@ function semanticSnapshot(database) {
     const out = {};
     for (const [column, value] of Object.entries(row)) {
       if (column === 'id') continue;
+      if (table === 'vault_files' && column === 'st_dev') {
+        out.device = value;
+        continue;
+      }
       if (table === 'vault_directories' && column === 'parent_id') out[column] = value == null ? null : dirs[value];
       else if (table === 'vault_files' && column === 'directory_id') out[column] = dirs[value];
       else if (table === 'frontmatter_nodes' && column === 'file_id') out[column] = files[value];
@@ -301,13 +305,19 @@ function semanticSnapshot(database) {
     const pluginState = table === 'vault_index_state';
     const columns = pluginState
       ? tableData.columns.filter(column => column !== 'ignored_file_paths_snapshot')
-      : tableData.columns;
+      : table === 'vault_files'
+        ? tableData.columns
+          .filter(column => !(excludeFileDevice && (column === 'st_dev' || column === 'device')))
+          .map(column => column === 'st_dev' ? 'device' : column)
+          .sort()
+        : tableData.columns;
     const rows = tableData.rows.map(row => {
       const normalized = normalize(table, row);
       if (pluginState) {
         delete normalized.link_resolution_version;
         delete normalized.ignored_file_paths_snapshot;
       }
+      if (excludeFileDevice && table === 'vault_files') delete normalized.device;
       return normalized;
     }).sort((a, b) => key(a).localeCompare(key(b)));
     snapshot[table] = { columns, rows };
@@ -315,11 +325,11 @@ function semanticSnapshot(database) {
   return snapshot;
 }
 
-function assertParity(pythonDb, typescriptDb, label, excludedTables = []) {
+function assertParity(pythonDb, typescriptDb, label, excludedTables = [], excludeFileDevice = false) {
   assert.deepStrictEqual(JSON.parse(execFileSync(PYTHON, ['-c', FOREIGN_KEYS_SCRIPT, pythonDb], { encoding: 'utf8' })), [], label + ': Python foreign keys');
   assert.deepStrictEqual(JSON.parse(execFileSync(PYTHON, ['-c', FOREIGN_KEYS_SCRIPT, typescriptDb], { encoding: 'utf8' })), [], label + ': TypeScript foreign keys');
-  const actual = semanticSnapshot(typescriptDb);
-  const expected = semanticSnapshot(pythonDb);
+  const actual = semanticSnapshot(typescriptDb, excludeFileDevice);
+  const expected = semanticSnapshot(pythonDb, excludeFileDevice);
   const comparedTables = TABLES.filter(table => !excludedTables.includes(table));
   const badTables = comparedTables.filter(table => !isDeepStrictEqual(actual[table], expected[table]));
   if (badTables.length > 0) {
@@ -1264,6 +1274,20 @@ test('indexes a complete fixture with content parity and explicit link behavior'
   for (const kind of ['markdown', 'image', 'script', 'video', 'recording', 'pdf']) assert(kinds[kind], 'missing file kind ' + kind);
   assert(snapshot.frontmatter_errors.rows.some(row => row.error_output === 'yaml-parse-error'));
 });
+test('persists bigint device and inode identity from filesystem stat', async () => {
+  const vault = await makeVault('device-identity', { 'identity.md': '# Identity\n' });
+  const database = join(workRoot, 'device-identity.db');
+  await indexVault(vault, database);
+  const filePath = join(vault, 'identity.md');
+  const fileStat = await stat(filePath, { bigint: true });
+  const persisted = JSON.parse(execFileSync(PYTHON, [
+    '-c',
+    'import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute("SELECT CAST(device AS TEXT), CAST(inode AS TEXT) FROM vault_files WHERE path=?", (sys.argv[2],)).fetchone()))',
+    database, filePath,
+  ], { encoding: 'utf8' }));
+  assert.deepEqual(persisted, [fileStat.dev.toString(), fileStat.ino.toString()]);
+});
+
 test('matches the Python oracle on a generated nine-note YAML fixture', async () => {
   const vault = await makeVault('nine-note-fixture', {
     'note1.md': '---\naliases: aliases: note2\n---\n\nImproper nesting of yaml\n',
@@ -1416,7 +1440,11 @@ test('uses the vault-local default database path and preserves migration rows', 
   execFileSync(PYTHON, ['-c', 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("ALTER TABLE vault_files DROP COLUMN mtime_ns"); c.commit()', legacyTypescript]);
   oracle(vault, legacyPython);
   await indexVault(vault, legacyTypescript);
-  assertParity(legacyPython, legacyTypescript, 'legacy schema migration diverged from oracle');
+  const legacyPythonFile = rawSnapshot(legacyPython).vault_files.rows.find(file => file.path === join(vault, 'legacy.md'));
+  const legacyTypescriptFile = rawSnapshot(legacyTypescript).vault_files.rows.find(file => file.path === join(vault, 'legacy.md'));
+  assert.equal(BigInt(legacyTypescriptFile?.device), (await stat(join(vault, 'legacy.md'), { bigint: true })).dev,
+    'legacy TypeScript row must be reparsed and store the current filesystem device');
+  assertParity(legacyPython, legacyTypescript, 'legacy schema migration diverged from oracle', [], true);
   const migrated = rawSnapshot(legacyTypescript);
   assert(!migrated.markdown_nodes.columns.includes('heading_text'));
   assert(!migrated.vault_links.columns.includes('target_heading'));
