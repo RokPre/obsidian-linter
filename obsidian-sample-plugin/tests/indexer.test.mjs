@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -123,15 +123,18 @@ function testIgnoredFileSnapshot(vaultPath, configDir, ignoredPaths) {
   return paths.sort();
 }
 
-const indexVault = (vaultPath, databasePath, onProgress, configDir = '.obsidian', overrides, beforeResolve, reverseInventory = false) => {
+const indexVault = (vaultPath, databasePath, onProgress, configDir = '.obsidian', overrides, beforeResolve, reverseInventory = false, targetIndexer = indexer) => {
   const ignoredPaths = [...testIgnoredPaths];
   const ignoredFilePaths = testIgnoredFileSnapshot(vaultPath, configDir, ignoredPaths);
-  return indexer.indexVault(vaultPath, configDir, databasePath, onProgress, async queries => {
+  return targetIndexer.indexVault(vaultPath, configDir, databasePath, onProgress, async queries => {
     await beforeResolve?.();
     return testHostResolution(vaultPath, queries, configDir, overrides, ignoredPaths, reverseInventory);
   }, ignoredFilePaths);
 };
 let bundlePath;
+let noFollowBundlePath;
+let noFollowIndexer;
+let noFollowFs;
 let workRoot;
 
 before(async () => {
@@ -148,6 +151,31 @@ before(async () => {
     logLevel: 'silent',
   });
   indexer = await import(`${pathToFileURL(bundlePath).href}?test=${Date.now()}`);
+  noFollowBundlePath = join(workRoot, 'indexer-no-follow-test.cjs');
+  await build({
+    entryPoints: [join(PLUGIN_DIR, 'src', 'indexer.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    loader: { '.wasm': 'binary' },
+    outfile: noFollowBundlePath,
+    external: [],
+    logLevel: 'silent',
+  });
+  const Module = createRequire(import.meta.url)('node:module');
+  const nativeFs = createRequire(import.meta.url)('node:fs');
+  const originalLoad = Module._load;
+  noFollowFs = { ...nativeFs, constants: { ...nativeFs.constants } };
+  Module._load = function (request, parent, isMain) {
+    return request === 'node:fs' && parent?.filename === noFollowBundlePath
+      ? noFollowFs
+      : originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    noFollowIndexer = await import(`${pathToFileURL(noFollowBundlePath).href}?test=${Date.now()}`);
+  } finally {
+    Module._load = originalLoad;
+  }
   rulesConfigBundlePath = join(PLUGIN_DIR, `.rules-config-test-${process.pid}.mjs`);
   await build({
     entryPoints: [join(PLUGIN_DIR, 'src', 'rules-config.ts')],
@@ -164,6 +192,7 @@ before(async () => {
 after(async () => {
   if (bundlePath) await rm(bundlePath, { force: true });
   if (rulesConfigBundlePath) await rm(rulesConfigBundlePath, { force: true });
+  if (noFollowBundlePath) await rm(noFollowBundlePath, { force: true });
   if (workRoot) await rm(workRoot, { recursive: true, force: true });
   if (savedSelf === undefined) delete globalThis.self;
   else globalThis.self = savedSelf;
@@ -232,6 +261,65 @@ function rawSnapshot(database) {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   }));
+}
+function persistedFileIdentity(database, filePath) {
+  return JSON.parse(execFileSync(PYTHON, [
+    '-c',
+    'import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute("SELECT CAST(device AS TEXT), CAST(inode AS TEXT), CAST(mtime_ns AS TEXT) FROM vault_files WHERE path=?", (sys.argv[2],)).fetchone()))',
+    database, filePath,
+  ], { encoding: 'utf8' }));
+}
+
+async function sqlJsVariableLimit() {
+  const initSqlJs = createRequire(import.meta.url)('sql.js');
+  const SQL = await initSqlJs();
+  const database = new SQL.Database();
+  const accepts = count => {
+    let statement;
+    try {
+      statement = database.prepare(`SELECT 1 WHERE 1 IN (${Array(count).fill('?').join(',')})`);
+      return true;
+    } catch (error) {
+      assert.match(String(error), /too many SQL variables/i, 'the SQL.js limit probe must fail specifically at SQLite’s variable limit');
+      return false;
+    } finally {
+      statement?.free();
+    }
+  };
+  let lower = 0;
+  let upper = 1;
+  while (accepts(upper)) {
+    lower = upper;
+    upper *= 2;
+    assert(upper <= 1_048_576, 'SQL.js variable limit probe exceeded its bounded search range');
+  }
+  while (upper - lower > 1) {
+    const middle = Math.floor((lower + upper) / 2);
+    if (accepts(middle)) lower = middle;
+    else upper = middle;
+  }
+  database.close();
+  return lower;
+}
+
+function seedDeletedFileRows(database, vaultPath, pathPrefix, count) {
+  const script = String.raw`
+import sqlite3, sys
+database, vault, prefix, count = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+connection = sqlite3.connect(database)
+directory_id = connection.execute('SELECT id FROM vault_directories WHERE path = ?', (vault,)).fetchone()[0]
+next_id = connection.execute('SELECT COALESCE(MAX(id), 0) + 1 FROM vault_files').fetchone()[0]
+connection.executemany(
+    'INSERT INTO vault_files (id, directory_id, path, name, inode, device, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ((next_id + index, directory_id, f'{prefix}{index}.md', f'stale-{index}', index + 1, None, 0, '.md', 'markdown') for index in range(count)),
+)
+connection.commit()
+print(count)
+`;
+  return execFileSync(PYTHON, ['-c', script, database, vaultPath, pathPrefix, String(count)], {
+    cwd: ROOT_DIR,
+    encoding: 'utf8',
+  }).trim();
 }
 
 function key(value) {
@@ -1286,6 +1374,913 @@ test('persists bigint device and inode identity from filesystem stat', async () 
     database, filePath,
   ], { encoding: 'utf8' }));
   assert.deepEqual(persisted, [fileStat.dev.toString(), fileStat.ino.toString()]);
+});
+
+test('matches only unique, verified file identities with exact mtime and effective kind', async () => {
+  const identity = { device: '90071992547409931', inode: '9007199254740993123', mtime_ns: '900719925474099312345' };
+  const source = { path: '/vault/old.md', ...identity, kind: 'markdown', regular: true };
+  const destination = { path: '/vault/new.md', ...identity, kind: 'markdown', regular: true };
+  const match = (deleted = [source], created = [destination], unchanged = []) =>
+    indexer.match_file_moves(deleted, created, unchanged);
+
+  assert.deepEqual(match(), [{ source, destination }]);
+  assert.deepEqual(match([source], [{ ...destination, mtime_ns: '900719925474099312346' }]), []);
+  const negativeSource = { ...source, mtime_ns: -1n };
+  const negativeDestination = { ...destination, mtime_ns: '-1' };
+  assert.deepEqual(match([negativeSource], [negativeDestination]), [{ source: negativeSource, destination: negativeDestination }]);
+  assert.deepEqual(match([negativeSource], [{ ...negativeDestination, mtime_ns: '-2' }]), [],
+    'a one-nanosecond difference in negative mtimes must prevent a match');
+  assert.deepEqual(match([{ ...source, device: -1n }]), [], 'device identity must remain nonnegative');
+  assert.deepEqual(match([{ ...source, inode: '-1' }]), [], 'inode identity must remain nonnegative');
+  assert.deepEqual(match([source], [{ ...destination, kind: 'excalidraw' }]), []);
+  assert.deepEqual(match([source], [{ ...destination, device: null }]), []);
+  assert.deepEqual(match([source], [{ ...destination, inode: Number.MAX_SAFE_INTEGER + 1 }]), []);
+  assert.deepEqual(match([source], [{ ...destination, regular: false }]), []);
+  assert.deepEqual(match([source, { ...source, path: '/vault/old-link.md' }]), []);
+  assert.deepEqual(match([source], [destination, { ...destination, path: '/vault/another.md' }]), []);
+  assert.deepEqual(match([source], [destination], [{ ...destination, path: '/vault/surviving-link.md' }]), []);
+  assert.deepEqual(match([{ ...source, device: null }]), []);
+
+  const vault = await makeVault('move-match-kind', {
+    'destination.md': '---\ntags: [excalidraw]\n---\n# Drawing\n',
+  });
+  const parsed = indexer.parse_file(join(vault, 'destination.md'), new indexer.MarkdownTreeParser());
+  assert.equal(parsed.kind, 'excalidraw');
+  const excalidrawSource = { ...source, kind: 'excalidraw' };
+  const excalidrawDestination = { ...destination, kind: parsed.kind };
+  assert.deepEqual(
+    indexer.match_file_moves([excalidrawSource], [excalidrawDestination], []),
+    [{ source: excalidrawSource, destination: excalidrawDestination }],
+  );
+});
+
+test('reconciles a trailing-dot move with the same filename metadata as normal indexing', async () => {
+  const vault = await makeVault('move-trailing-dot-metadata', {
+    'ordinary.md': '# Ordinary note\n',
+    'normal/trailing.': '# Normal trailing dot\n',
+    'old/source.bin': '# Moved trailing dot\n',
+    'new/.keep': '',
+  });
+  const database = join(workRoot, 'move-trailing-dot-metadata.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const ordinary = before.vault_files.rows.find(row => row.path === join(vault, 'ordinary.md'));
+  const normal = before.vault_files.rows.find(row => row.path === join(vault, 'normal', 'trailing.'));
+  const original = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'source.bin'));
+  assert.deepEqual([ordinary?.name, ordinary?.extension], ['ordinary', '.md']);
+  assert.deepEqual([normal?.name, normal?.extension], ['trailing.', '']);
+
+  const destination = join(vault, 'new', 'trailing.');
+  await rename(join(vault, 'old', 'source.bin'), destination);
+  await indexVault(vault, database);
+  const after = rawSnapshot(database);
+  const moved = after.vault_files.rows.find(row => row.path === destination);
+  assert.equal(moved?.id, original?.id, 'verified move must retain its indexed row');
+  assert.deepEqual([moved?.name, moved?.extension], [normal?.name, normal?.extension],
+    'move reconciliation must use normal insert filename normalization');
+});
+
+test('reconciles moves and deletes beyond the SQL.js variable limit', async () => {
+  const vault = await makeVault('file-move-reconcile-variable-limit', {
+    'links.md': '[[Target]]\n',
+    'old/Target.md': '---\ntags: [moved]\n---\n# Stable heading\n\nMoved body.\n',
+    'new/.keep': '',
+  });
+  const database = join(workRoot, 'file-move-reconcile-variable-limit.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const source = join(vault, 'old', 'Target.md');
+  const destination = join(vault, 'new', 'Target.md');
+  const variableLimit = await sqlJsVariableLimit();
+  assert(variableLimit > 400, 'the SQL.js variable limit must exceed the application query chunk size');
+  const stalePathPrefix = `${vault}/stale-variable-limit-`;
+  const stalePathCount = Math.max(variableLimit + 1, 801);
+  assert.equal(seedDeletedFileRows(database, vault, stalePathPrefix, stalePathCount), String(stalePathCount));
+  await rename(source, destination);
+
+  const result = await indexVault(vault, database);
+  const after = rawSnapshot(database);
+  const oldFile = before.vault_files.rows.find(row => row.path === source);
+  const movedFile = after.vault_files.rows.find(row => row.path === destination);
+  assert(oldFile);
+  assert.equal(movedFile?.id, oldFile.id, 'a verified move must retain the file row ID');
+  assert.deepEqual(
+    after.markdown_nodes.rows.filter(row => row.file_id === oldFile.id),
+    before.markdown_nodes.rows.filter(row => row.file_id === oldFile.id),
+    'a verified move must retain its parsed Markdown rows',
+  );
+  assert.deepEqual(
+    after.frontmatter_nodes.rows.filter(row => row.file_id === oldFile.id),
+    before.frontmatter_nodes.rows.filter(row => row.file_id === oldFile.id),
+    'a verified move must retain its parsed frontmatter rows',
+  );
+  const link = after.vault_links.rows.find(row => row.source_file_id === before.vault_files.rows.find(row => row.path === join(vault, 'links.md'))?.id);
+  assert.equal(link?.target_file_id, oldFile.id, 'the existing link must resolve to the moved file row');
+  assert.equal(after.vault_files.rows.filter(row => row.path.startsWith(stalePathPrefix)).length, 0,
+    'every stale indexed path beyond SQLite’s variable limit must be deleted');
+  assert.deepEqual(JSON.parse(execFileSync(PYTHON, ['-c', FOREIGN_KEYS_SCRIPT, database], { encoding: 'utf8' })), [],
+    'move reconciliation and deletion must leave all foreign keys valid');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 0, indexedFiles: 0, deletedFiles: stalePathCount },
+    'the move must preserve its row while counting all ordinary stale-row deletions',
+  );
+});
+
+test('does not path-follow a destination that reappears as a symlink after reconciliation sees it vanish', async () => {
+  const vault = await makeVault('file-move-vanished-symlink-reappearance', {
+    'old/Vanished.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-vanished-symlink-reappearance.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldPath = join(vault, 'old', 'Vanished.md');
+  const destination = join(vault, 'Vanished.md');
+  const markerPath = join(workRoot, 'vanished-symlink-external-marker.md');
+  const marker = 'EXTERNAL VANISHED-DESTINATION MARKER MUST NOT BE READ OR INDEXED';
+  await writeFile(markerPath, `# ${marker}\n`);
+  await rename(oldPath, destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalLstatSync = fs.lstatSync;
+  const originalStatSync = fs.statSync;
+  const originalReadFileSync = fs.readFileSync;
+  let destinationStats = 0;
+  let destinationReads = 0;
+  fs.lstatSync = function patchedLstatSync(filePath, ...args) {
+    if (filePath === destination && ++destinationStats === 2) {
+      fs.unlinkSync(destination);
+      fs.symlinkSync(markerPath, destination);
+      throw Object.assign(new Error('simulated vanished destination observation'), { code: 'ENOENT' });
+    }
+    return originalLstatSync.call(this, filePath, ...args);
+  };
+  fs.statSync = function patchedStatSync(filePath, ...args) {
+    if (filePath === destination) destinationReads += 1;
+    return originalStatSync.call(this, filePath, ...args);
+  };
+  fs.readFileSync = function patchedReadFileSync(filePath, ...args) {
+    if (filePath === destination || filePath === markerPath) destinationReads += 1;
+    return originalReadFileSync.call(this, filePath, ...args);
+  };
+  let result;
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+    fs.statSync = originalStatSync;
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(destinationStats, 2, 'the destination must vanish during reconciliation and reappear as a symlink');
+  assert.equal(destinationReads, 0, 'the unsafe destination must not enter path-following fallback parsing');
+  assert.equal(fs.lstatSync(destination).isSymbolicLink(), true, 'the deterministic reappearance must leave a symlink at the destination');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldPath), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'the reappeared symlink must not be indexed');
+  assert(!JSON.stringify(after).includes(marker), 'the external target must not appear in indexed data');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 0, indexedFiles: 0, deletedFiles: 1 },
+  );
+});
+
+test('opens a FIFO replacement nonblocking and skips it without hanging', async () => {
+  const vault = await makeVault('file-move-fifo-replacement', {
+    'old/Blocked.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-fifo-replacement.db');
+  await indexVault(vault, database);
+  const oldPath = join(vault, 'old', 'Blocked.md');
+  const destination = join(vault, 'Blocked.md');
+  const fifo = join(workRoot, 'move-candidate.fifo');
+  await rename(oldPath, destination);
+  execFileSync(PYTHON, ['-c', 'import os,sys; os.mkfifo(sys.argv[1])', fifo], { cwd: ROOT_DIR });
+  const childScript = `
+    const fs = require('node:fs');
+    const indexer = require(process.argv[1]);
+    const [vault, database, destination, fifo] = process.argv.slice(2);
+    const originalOpenSync = fs.openSync;
+    fs.openSync = function (filePath, ...args) {
+      if (filePath === destination) {
+        fs.unlinkSync(destination);
+        fs.renameSync(fifo, destination);
+      }
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+    indexer.indexVault(vault, '.obsidian', database, undefined, async () => ({ vaultFiles: [], selections: [] }), [])
+      .then(result => console.log('FIFO_INDEX_RESULT ' + JSON.stringify(result)))
+      .catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  let child;
+  try {
+    child = spawnSync(process.execPath, [
+      '--input-type=commonjs', '-e', childScript,
+      bundlePath, vault, database, destination, fifo,
+    ], { cwd: PLUGIN_DIR, encoding: 'utf8', timeout: 5_000, maxBuffer: 4 * 1024 * 1024 });
+  } finally {
+    await rm(destination, { force: true });
+    await rm(fifo, { force: true });
+  }
+  assert.ifError(child.error, `bounded FIFO indexing child failed: ${child.stderr || child.error?.message}`);
+  assert.equal(child.status, 0, `FIFO indexing child must complete successfully:\n${child.stdout}\n${child.stderr}`);
+  assert.match(child.stdout, /FIFO_INDEX_RESULT /, 'the child must finish the indexing operation');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldPath), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'a FIFO must not be indexed');
+});
+
+test('does not read an external symlink installed before the first candidate lstat', async () => {
+  const vault = await makeVault('file-move-symlink-first-candidate-lstat', {
+    'old/Race.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-symlink-first-candidate-lstat.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldPath = join(vault, 'old', 'Race.md');
+  const destination = join(vault, 'Race.md');
+  const replacement = join(workRoot, 'race-first-candidate-marker.md');
+  const marker = 'EXTERNAL FIRST-CANDIDATE MARKER MUST NOT BE READ OR INDEXED';
+  await writeFile(replacement, `# ${marker}\n`);
+  await rename(oldPath, destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalLstatSync = fs.lstatSync;
+  const originalReadFileSync = fs.readFileSync;
+  let firstCandidateLstat = 0;
+  let externalReads = 0;
+  fs.lstatSync = function patchedLstatSync(filePath, ...args) {
+    if (filePath === destination && firstCandidateLstat++ === 0) {
+      fs.unlinkSync(destination);
+      fs.symlinkSync(replacement, destination);
+    }
+    return originalLstatSync.call(this, filePath, ...args);
+  };
+  fs.readFileSync = function patchedReadFileSync(filePath, ...args) {
+    if (filePath === replacement) externalReads++;
+    return originalReadFileSync.call(this, filePath, ...args);
+  };
+  let result;
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(firstCandidateLstat, 1, 'the symlink must be installed at the initial candidate classification');
+  assert.equal(externalReads, 0, 'the external target must never be read');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldPath), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'the symlink destination must not be indexed');
+  assert(!JSON.stringify(after).includes(marker), 'the external target must not appear in indexed data');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 0, indexedFiles: 0, deletedFiles: 1 },
+  );
+});
+
+test('does not block on a FIFO installed before the first candidate lstat', async () => {
+  const vault = await makeVault('file-move-fifo-first-candidate-lstat', {
+    'old/Blocked.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-fifo-first-candidate-lstat.db');
+  await indexVault(vault, database);
+  const oldPath = join(vault, 'old', 'Blocked.md');
+  const destination = join(vault, 'Blocked.md');
+  const fifo = join(workRoot, 'first-candidate.fifo');
+  await rename(oldPath, destination);
+  execFileSync(PYTHON, ['-c', 'import os,sys; os.mkfifo(sys.argv[1])', fifo], { cwd: ROOT_DIR });
+  const childScript = `
+    const fs = require('node:fs');
+    const indexer = require(process.argv[1]);
+    const [vault, database, destination, fifo] = process.argv.slice(2);
+    const originalLstatSync = fs.lstatSync;
+    fs.lstatSync = function (filePath, ...args) {
+      if (filePath === destination) {
+        fs.unlinkSync(destination);
+        fs.renameSync(fifo, destination);
+      }
+      return originalLstatSync.call(this, filePath, ...args);
+    };
+    indexer.indexVault(vault, '.obsidian', database, undefined, async () => ({ vaultFiles: [], selections: [] }), [])
+      .then(result => console.log('FIRST_CANDIDATE_FIFO_RESULT ' + JSON.stringify(result)))
+      .catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  let child;
+  try {
+    child = spawnSync(process.execPath, [
+      '--input-type=commonjs', '-e', childScript,
+      bundlePath, vault, database, destination, fifo,
+    ], { cwd: PLUGIN_DIR, encoding: 'utf8', timeout: 5_000, maxBuffer: 4 * 1024 * 1024 });
+  } finally {
+    await rm(destination, { force: true });
+    await rm(fifo, { force: true });
+  }
+  assert.ifError(child.error, `bounded FIFO indexing child failed: ${child.stderr || child.error?.message}`);
+  assert.equal(child.status, 0, `FIFO indexing child must complete successfully:\n${child.stdout}\n${child.stderr}`);
+  assert.match(child.stdout, /FIRST_CANDIDATE_FIFO_RESULT /, 'the child must finish the indexing operation');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldPath), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'the FIFO must not be indexed');
+});
+
+test('removes a candidate that vanishes before its first lstat while cleaning up its old path', async () => {
+  const vault = await makeVault('file-move-missing-first-candidate-lstat', {
+    'old/Missing.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-missing-first-candidate-lstat.db');
+  await indexVault(vault, database);
+  const oldPath = join(vault, 'old', 'Missing.md');
+  const destination = join(vault, 'Missing.md');
+  await rename(oldPath, destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalLstatSync = fs.lstatSync;
+  let candidateVanished = false;
+  fs.lstatSync = function patchedLstatSync(filePath, ...args) {
+    if (filePath === destination && !candidateVanished) {
+      candidateVanished = true;
+      fs.unlinkSync(destination);
+    }
+    return originalLstatSync.call(this, filePath, ...args);
+  };
+  let result;
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+
+  assert(candidateVanished, 'the candidate must vanish at its initial lstat');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldPath), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'a missing candidate must not be indexed');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 0, indexedFiles: 0, deletedFiles: 1 },
+  );
+});
+
+test('indexes a regular replacement installed before the first candidate lstat', async () => {
+  const vault = await makeVault('file-move-regular-first-candidate-lstat', {
+    'old/Race.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-regular-first-candidate-lstat.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldPath = join(vault, 'old', 'Race.md');
+  const destination = join(vault, 'Race.md');
+  const replacement = join(workRoot, 'race-first-candidate-regular.md');
+  await writeFile(replacement, '# First candidate regular replacement\n');
+  await rename(oldPath, destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalLstatSync = fs.lstatSync;
+  let candidateReplaced = false;
+  fs.lstatSync = function patchedLstatSync(filePath, ...args) {
+    if (filePath === destination && !candidateReplaced) {
+      candidateReplaced = true;
+      fs.renameSync(replacement, destination);
+    }
+    return originalLstatSync.call(this, filePath, ...args);
+  };
+  let result;
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+
+  assert(candidateReplaced, 'the regular replacement must be installed at initial candidate classification');
+  const after = rawSnapshot(database);
+  const indexed = after.vault_files.rows.find(row => row.path === destination);
+  assert(indexed, 'the replacement regular file must be indexed');
+  assert.notEqual(indexed.id, before.vault_files.rows.find(row => row.path === oldPath)?.id, 'a replacement must not retain the old file identity');
+  assert(after.markdown_nodes.rows.some(row => row.file_id === indexed.id && row.value === 'First candidate regular replacement'),
+    'normal indexing must parse the regular replacement');
+  assert.equal(after.vault_files.rows.some(row => row.path === oldPath), false, 'the stale source row must be removed');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 1, indexedFiles: 1, deletedFiles: 1 },
+  );
+});
+
+test('does not read an external symlink swapped at the safe candidate open boundary', async () => {
+  const vault = await makeVault('file-move-symlink-open-boundary-race', {
+    'old/Race.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-symlink-open-boundary-race.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldFile = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'Race.md'));
+  const destination = join(vault, 'Race.md');
+  const replacement = join(workRoot, 'race-open-boundary-marker.md');
+  const marker = 'EXTERNAL OPEN-BOUNDARY MARKER MUST NOT BE READ OR INDEXED';
+  await writeFile(replacement, `# ${marker}\n`);
+  await rename(join(vault, 'old', 'Race.md'), destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalOpenSync = fs.openSync;
+  const originalReadFileSync = fs.readFileSync;
+  let openSwaps = 0;
+  let externalReads = 0;
+  const targetStat = fs.statSync(replacement, { bigint: true });
+  fs.openSync = function patchedOpenSync(filePath, ...args) {
+    if (filePath === destination && ++openSwaps === 1) {
+      fs.unlinkSync(destination);
+      fs.symlinkSync(replacement, destination);
+    }
+    return originalOpenSync.call(this, filePath, ...args);
+  };
+  fs.readFileSync = function patchedReadFileSync(fileOrFd, ...args) {
+    if (fileOrFd === replacement) externalReads += 1;
+    else if (typeof fileOrFd === 'number') {
+      try {
+        const openedStat = fs.fstatSync(fileOrFd, { bigint: true });
+        if (openedStat.dev === targetStat.dev && openedStat.ino === targetStat.ino) externalReads += 1;
+      } catch {
+        // Non-file descriptors are irrelevant to this read guard.
+      }
+    }
+    return originalReadFileSync.call(this, fileOrFd, ...args);
+  };
+  let result;
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(openSwaps, 1, 'the external symlink must replace the candidate at its open boundary');
+  assert.equal(externalReads, 0, 'no read may reach the external symlink target');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldFile?.path), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'the symlink destination must not be indexed');
+  assert(!JSON.stringify(after).includes(marker), 'the external target marker must not appear in indexed data');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 0, indexedFiles: 0, deletedFiles: 1 },
+  );
+});
+
+test('skips indexing a moved destination replaced by a symlink before non-following verification', async () => {
+  const vault = await makeVault('file-move-symlink-replacement-race', {
+    'old/Race.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-symlink-replacement-race.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldFile = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'Race.md'));
+  const destination = join(vault, 'Race.md');
+  const replacement = join(workRoot, 'race-symlink-marker.md');
+  const marker = 'EXTERNAL SYMLINK MARKER MUST NOT BE INDEXED';
+  await writeFile(replacement, `# ${marker}\n`);
+  await rename(join(vault, 'old', 'Race.md'), destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  let result;
+  const originalLstatSync = fs.lstatSync;
+  let destinationStats = 0;
+  fs.lstatSync = function patchedLstatSync(filePath, ...args) {
+    if (filePath === destination && ++destinationStats === 2) {
+      fs.unlinkSync(destination);
+      fs.symlinkSync(replacement, destination);
+    }
+    return originalLstatSync.call(this, filePath, ...args);
+  };
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+
+  assert.equal(destinationStats, 2, 'the test must replace the path between candidate classification and verification');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === oldFile?.path), false, 'the stale source row must be removed');
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'the symlink destination must not be indexed');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 0, indexedFiles: 0, deletedFiles: 1 },
+    'a skipped non-regular replacement contributes only the stale source deletion',
+  );
+  assert(!JSON.stringify(after).includes(marker), 'the external symlink target must never be read or indexed');
+});
+
+test('falls back to delete and reindex when a moved destination becomes a different regular file before verification', async () => {
+  const vault = await makeVault('file-move-regular-replacement-race', {
+    'old/Race.md': '# Original moved file\n',
+  });
+  const database = join(workRoot, 'file-move-regular-replacement-race.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldFile = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'Race.md'));
+  const destination = join(vault, 'Race.md');
+  const replacement = join(workRoot, 'race-regular-replacement.md');
+  await writeFile(replacement, '# Race replacement heading\n');
+  await rename(join(vault, 'old', 'Race.md'), destination);
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  let result;
+  const originalLstatSync = fs.lstatSync;
+  let destinationStats = 0;
+  let replaced = false;
+  fs.lstatSync = function patchedLstatSync(filePath, ...args) {
+    if (filePath === destination && ++destinationStats >= 2 && !replaced) {
+      fs.renameSync(replacement, destination);
+      replaced = true;
+    }
+    return originalLstatSync.call(this, filePath, ...args);
+  };
+  try {
+    result = await indexVault(vault, database);
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+
+  assert(replaced, 'the test must replace the path after candidate classification and before verification');
+  const after = rawSnapshot(database);
+  const replacementFile = after.vault_files.rows.find(row => row.path === destination);
+  assert(replacementFile);
+  assert.notEqual(replacementFile.id, oldFile?.id, 'a changed regular file must not retain the moved file row');
+  assert.equal(replacementFile.kind, 'markdown', 'the replacement must remain markdown so its body is parsed');
+  assert(after.markdown_nodes.rows.some(row => row.file_id === replacementFile.id && row.value === 'Race replacement heading'),
+    'normal indexing must parse the replacement regular file');
+  assert.equal(after.vault_files.rows.some(row => row.path === oldFile?.path), false, 'the stale source row must be removed');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 1, indexedFiles: 1, deletedFiles: 1 },
+    'a regular replacement must be counted as a new indexed file and stale source deletion',
+  );
+});
+
+async function withSortedVaultRootTraversal(vault, run) {
+
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalOpendirSync = fs.opendirSync;
+  const traversed = [];
+  fs.opendirSync = function sortedRootOpendirSync(directory, ...args) {
+    const entries = originalOpendirSync.call(this, directory, ...args);
+    if (directory !== vault) return entries;
+    const children = [];
+    try {
+      for (let child = entries.readSync(); child; child = entries.readSync()) children.push(child);
+    } finally {
+      entries.closeSync();
+    }
+    children.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    let position = 0;
+    return {
+      readSync() {
+        const child = children[position++];
+        if (child) traversed.push(child.name);
+        return child ?? null;
+      },
+      closeSync() {},
+    };
+  };
+  try {
+    return await run(traversed);
+  } finally {
+    fs.opendirSync = originalOpendirSync;
+  }
+
+}
+
+test('refreshes a kind-incompatible cached candidate after the first 1000 indexed files', async () => {
+  const vault = await makeVault('cached-fallback-regular-refresh', {
+    'old/Source.md': '# Original content\n',
+  });
+  const database = join(workRoot, 'cached-fallback-regular-refresh.db');
+  await indexVault(vault, database);
+  const sourceIdentity = persistedFileIdentity(database, join(vault, 'old', 'Source.md'));
+  for (let index = 0; index < 1000; index += 1) {
+    await writeFile(join(vault, `note-${String(index).padStart(4, '0')}.md`), '# Batch note\n');
+  }
+  const destination = join(vault, 'zz-candidate.md');
+  await rename(join(vault, 'old/Source.md'), destination);
+  const initialDestinationStat = await stat(destination, { bigint: true });
+  assert.equal(initialDestinationStat.dev.toString(), sourceIdentity[0]);
+  assert.equal(initialDestinationStat.ino.toString(), sourceIdentity[1]);
+  assert.equal(initialDestinationStat.mtimeNs.toString(), sourceIdentity[2]);
+  await writeFile(destination, '---\ntags: [excalidraw]\n---\n# Incompatible candidate\n');
+  setMtimeNs(destination, BigInt(sourceIdentity[2]));
+  const replacement = join(workRoot, 'cached-fallback-current.md');
+  await writeFile(replacement, '# Current replacement heading\n');
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalOpenSync = fs.openSync;
+  let candidateSafeOpens = 0;
+  let replaced = false;
+  const progress = [];
+  fs.openSync = function trackedCandidateOpen(filePath, ...args) {
+    if (filePath === destination) candidateSafeOpens += 1;
+    return originalOpenSync.call(this, filePath, ...args);
+  };
+  let result;
+  try {
+    result = await withSortedVaultRootTraversal(vault, async traversed => {
+      const indexed = await indexVault(vault, database, value => {
+        if (!value || value.phase !== 'indexing') return;
+        progress.push(value);
+        if (!replaced && value.completed === 1000) {
+          assert(candidateSafeOpens > 0, 'the original same-identity candidate must have been safely classified before replacement');
+          fs.renameSync(replacement, destination);
+          setMtimeNs(destination, BigInt(sourceIdentity[2]));
+          replaced = true;
+        }
+      });
+      assert.deepEqual(traversed, [
+        ...Array.from({ length: 1000 }, (_, index) => `note-${String(index).padStart(4, '0')}.md`),
+        'old',
+        'zz-candidate.md',
+      ], 'the traversal hook must visit all 1000 other files before the candidate');
+      return indexed;
+    });
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert(replaced, 'the candidate must be replaced after the first batch and before candidate consumption');
+  assert(progress.some(value => value.completed === 1000), 'the first 1000-file batch must complete before replacement');
+  assert(candidateSafeOpens > 0, 'the same-identity candidate must enter safe candidate classification');
+  const after = rawSnapshot(database);
+  const indexed = after.vault_files.rows.find(row => row.path === destination);
+  const currentStat = await stat(destination, { bigint: true });
+  assert.notEqual(currentStat.ino.toString(), initialDestinationStat.ino.toString(),
+    'the post-batch replacement must have a distinct inode from the cached candidate');
+  assert(indexed);
+  assert.equal(indexed.kind, 'markdown', 'the replacement must be parsed as markdown after the kind-incompatible candidate is rejected');
+  const persisted = persistedFileIdentity(database, destination);
+  assert.deepEqual(persisted, [currentStat.dev.toString(), currentStat.ino.toString(), currentStat.mtimeNs.toString()],
+    'persisted identity and nanosecond mtime must exactly match the replacement');
+  assert(after.markdown_nodes.rows.some(row => row.file_id === indexed.id && row.value === 'Current replacement heading'),
+    'the replacement heading must be parsed rather than stale cached candidate data');
+  assert.equal(after.vault_files.rows.some(row => row.path === join(vault, 'old', 'Source.md')), false);
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 1001, indexedFiles: 1001, deletedFiles: 1 },
+  );
+  assert.deepEqual(progress.at(-1), { phase: 'indexing', completed: 1001, total: 1001 });
+});
+
+test('skips a cached fallback candidate replaced by a symlink after 1000 indexed files', async () => {
+  const vault = await makeVault('cached-fallback-symlink-refresh', {
+    'old/Source.md': '# Original content\n',
+  });
+  const database = join(workRoot, 'cached-fallback-symlink-refresh.db');
+  await indexVault(vault, database);
+  const sourceIdentity = persistedFileIdentity(database, join(vault, 'old', 'Source.md'));
+  for (let index = 0; index < 1000; index += 1) {
+    await writeFile(join(vault, `note-${String(index).padStart(4, '0')}.md`), '# Batch note\n');
+  }
+  const destination = join(vault, 'zz-candidate.md');
+  await rename(join(vault, 'old/Source.md'), destination);
+  const initialDestinationStat = await stat(destination, { bigint: true });
+  assert.equal(initialDestinationStat.dev.toString(), sourceIdentity[0]);
+  assert.equal(initialDestinationStat.ino.toString(), sourceIdentity[1]);
+  assert.equal(initialDestinationStat.mtimeNs.toString(), sourceIdentity[2]);
+  await writeFile(destination, '---\ntags: [excalidraw]\n---\n# Incompatible candidate\n');
+  setMtimeNs(destination, BigInt(sourceIdentity[2]));
+  const incompatibleStat = await stat(destination, { bigint: true });
+  assert.equal(incompatibleStat.dev.toString(), sourceIdentity[0]);
+  assert.equal(incompatibleStat.ino.toString(), sourceIdentity[1]);
+  assert.equal(incompatibleStat.mtimeNs.toString(), sourceIdentity[2]);
+  assert.equal(indexer.parse_file(destination, new indexer.MarkdownTreeParser()).kind, 'excalidraw',
+    'the unchanged-identity candidate must have an effective kind incompatible with its cached source');
+  const external = join(workRoot, 'cached-fallback-symlink-marker.md');
+  const marker = 'EXTERNAL CACHED FALLBACK MUST NOT BE READ';
+  await writeFile(external, `# ${marker}\n`);
+  const fs = createRequire(import.meta.url)('node:fs');
+  const originalOpenSync = fs.openSync;
+  let candidateSafeOpens = 0;
+  const originalReadFileSync = fs.readFileSync;
+  let externalReads = 0;
+  fs.openSync = function trackedCandidateOpen(filePath, ...args) {
+    if (filePath === destination) candidateSafeOpens += 1;
+    return originalOpenSync.call(this, filePath, ...args);
+  };
+  fs.readFileSync = function guardedReadFileSync(fileOrFd, ...args) {
+    if (fileOrFd === external) externalReads++;
+    return originalReadFileSync.call(this, fileOrFd, ...args);
+  };
+  let replaced = false;
+  const progress = [];
+  let result;
+  try {
+    result = await withSortedVaultRootTraversal(vault, async traversed => {
+      const indexed = await indexVault(vault, database, value => {
+        if (!value || value.phase !== 'indexing') return;
+        progress.push(value);
+        if (!replaced && value.completed === 1000) {
+          assert(candidateSafeOpens > 0, 'the original same-identity candidate must have been safely classified before replacement');
+          fs.unlinkSync(destination);
+          fs.symlinkSync(external, destination);
+          replaced = true;
+        }
+      });
+      assert.deepEqual(traversed, [
+        ...Array.from({ length: 1000 }, (_, index) => `note-${String(index).padStart(4, '0')}.md`),
+        'old',
+        'zz-candidate.md',
+      ], 'the traversal hook must visit all 1000 other files before the candidate');
+      return indexed;
+    });
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert(replaced, 'the candidate must be replaced after the first batch and before candidate consumption');
+  assert(progress.some(value => value.completed === 1000), 'the first 1000-file batch must complete before replacement');
+  assert(candidateSafeOpens > 0, 'the same-identity candidate must enter safe candidate classification');
+  assert.equal(externalReads, 0, 'the external symlink target must not be read');
+  const after = rawSnapshot(database);
+  assert.equal(after.vault_files.rows.some(row => row.path === destination), false, 'the symlink must not be indexed');
+  assert.equal(after.vault_files.rows.some(row => row.path === join(vault, 'old', 'Source.md')), false);
+  assert(!JSON.stringify(after).includes(marker), 'the external marker must not appear in indexed data');
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 1000, indexedFiles: 1000, deletedFiles: 1 },
+  );
+  assert.deepEqual(progress.at(-1), { phase: 'indexing', completed: 1001, total: 1001 });
+});
+
+test('defers move candidate indexing when no-follow open is unavailable', async () => {
+  const vault = await makeVault('file-move-no-follow-unavailable', {
+    'old/Preserved.md': '---\ntags: [kept]\n---\n# Preserved parsed content\n',
+  });
+  const database = join(workRoot, 'file-move-no-follow-unavailable.db');
+  await indexVault(vault, database);
+  const beforeBytes = await readFile(database);
+  const before = rawSnapshot(database);
+  const source = join(vault, 'old', 'Preserved.md');
+  const destination = join(vault, 'Preserved.md');
+  const original = before.vault_files.rows.find(row => row.path === source);
+  await rename(source, destination);
+
+  const nativeFs = createRequire(import.meta.url)('node:fs');
+  const originalReadFileSync = noFollowFs.readFileSync;
+  let candidateReads = 0;
+  noFollowFs.constants.O_NOFOLLOW = undefined;
+  noFollowFs.readFileSync = function guardedReadFileSync(fileOrFd, ...args) {
+    if (fileOrFd === destination) candidateReads++;
+    return originalReadFileSync.call(this, fileOrFd, ...args);
+  };
+  try {
+    await assert.rejects(indexVault(vault, database, undefined, '.obsidian', undefined, undefined, false, noFollowIndexer), /safe.*open.*unavailable.*defer/i);
+  } finally {
+    noFollowFs.constants.O_NOFOLLOW = nativeFs.constants.O_NOFOLLOW;
+    noFollowFs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(candidateReads, 0, 'the candidate must not be read without a no-follow open');
+  assert.deepEqual(await readFile(database), beforeBytes, 'the failed scan must not persist database changes');
+  assert.deepEqual(rawSnapshot(database), before, 'the old file row and parsed records must remain unchanged');
+  assert.equal(original?.path, source);
+});
+
+test('reports final counters and progress for mixed add, modification, and safe move', async () => {
+  const vault = await makeVault('move-counters-mixed-scan', {
+    'old/Moved.md': '# Moved unchanged\n',
+    'modified.md': '# Before modification\n',
+    'new/.keep': '',
+  });
+  const database = join(workRoot, 'move-counters-mixed-scan.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldModificationTime = BigInt(before.vault_files.rows.find(row => row.path === join(vault, 'modified.md')).mtime_ns);
+  await rename(join(vault, 'old', 'Moved.md'), join(vault, 'new', 'Moved.md'));
+  await writeFile(join(vault, 'modified.md'), '# After modification\n');
+  setMtimeNs(join(vault, 'modified.md'), oldModificationTime + 1_000_000_000n);
+  await writeFile(join(vault, 'added.md'), '# New addition\n');
+
+  const progress = [];
+  const result = await indexVault(vault, database, value => progress.push(value));
+
+  assert.deepEqual(
+    { addedFiles: result.addedFiles, indexedFiles: result.indexedFiles, deletedFiles: result.deletedFiles },
+    { addedFiles: 1, indexedFiles: 2, deletedFiles: 0 },
+    'the move contributes no counts while the addition and modification retain their meanings',
+  );
+  assert.deepEqual(
+    progress.filter(value => value.phase === 'indexing'),
+    [
+      { phase: 'indexing', completed: 0, total: 2 },
+      { phase: 'indexing', completed: 2, total: 2 },
+    ],
+    'progress starts with and completes the reconciled two-file workload',
+  );
+});
+
+test('reconciles eligible files across a directory rename and remains stable on the next scan', async () => {
+  const vault = await makeVault('directory-move-reconcile', {
+    'links.md': '[[Target]]\n[[Late]]\n',
+    'old/Target.md': '---\ntags: [moved]\n---\n# Stable target\n',
+  });
+  const database = join(workRoot, 'directory-move-reconcile.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const target = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'Target.md'));
+  const targetMarkdown = before.markdown_nodes.rows.filter(row => row.file_id === target.id);
+  const targetFrontmatter = before.frontmatter_nodes.rows.filter(row => row.file_id === target.id);
+  const sourceLinkId = before.vault_files.rows.find(row => row.path === join(vault, 'links.md')).id;
+  assert(before.vault_missing_targets.rows.some(row => row.target === 'Late'));
+  await writeFile(join(vault, 'old', 'Late.md'), '# Previously missing target\n');
+  await rename(join(vault, 'old'), join(vault, 'renamed'));
+
+  const moved = await indexVault(vault, database);
+  const after = rawSnapshot(database);
+  const movedTarget = after.vault_files.rows.find(row => row.path === join(vault, 'renamed', 'Target.md'));
+  const movedLate = after.vault_files.rows.find(row => row.path === join(vault, 'renamed', 'Late.md'));
+  assert.equal(movedTarget?.id, target.id);
+  assert(movedLate);
+  assert(after.vault_directories.rows.some(row => row.id === movedTarget.directory_id && row.path === join(vault, 'renamed')));
+  assert.deepEqual(after.markdown_nodes.rows.filter(row => row.file_id === target.id), targetMarkdown);
+  assert.deepEqual(after.frontmatter_nodes.rows.filter(row => row.file_id === target.id), targetFrontmatter);
+  const links = after.vault_links.rows.filter(row => row.source_file_id === sourceLinkId);
+  assert(links.some(row => row.target_file_id === target.id));
+  assert(links.some(row => row.target_file_id === movedLate.id), 'a previously missing link must resolve to the moved destination');
+  assert.equal(after.vault_missing_targets.rows.some(row => row.target === 'Late'), false);
+  assert.equal(after.vault_index_state.rows[0].derived_data_dirty, 0);
+  assert.deepEqual(JSON.parse(execFileSync(PYTHON, ['-c', FOREIGN_KEYS_SCRIPT, database], { encoding: 'utf8' })), []);
+  assert.equal(moved.deletedFiles, 0);
+
+  const stable = await indexVault(vault, database);
+  assert.equal(stable.indexedFiles, 0);
+  assert.equal(stable.deletedFiles, 0);
+  const final = rawSnapshot(database);
+  assert.deepEqual(final.vault_files.rows, after.vault_files.rows);
+  assert.equal(final.vault_index_state.rows[0].derived_data_dirty, 0);
+});
+
+test('falls back to delete and reindex when a surviving hard link makes a directory move ambiguous', async () => {
+  const vault = await makeVault('directory-move-hardlink-fallback', {
+    'old/Shared.md': '# Shared inode\n',
+  });
+  const database = join(workRoot, 'directory-move-hardlink-fallback.db');
+  await link(join(vault, 'old', 'Shared.md'), join(vault, 'survivor.md'));
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const old = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'Shared.md'));
+  const survivor = before.vault_files.rows.find(row => row.path === join(vault, 'survivor.md'));
+  await rename(join(vault, 'old'), join(vault, 'renamed'));
+
+  await indexVault(vault, database);
+  const after = rawSnapshot(database);
+  const moved = after.vault_files.rows.find(row => row.path === join(vault, 'renamed', 'Shared.md'));
+  const stillSurviving = after.vault_files.rows.find(row => row.path === join(vault, 'survivor.md'));
+  assert(moved);
+  assert.notEqual(moved.id, old.id, 'an ambiguous candidate must use normal create/reindex');
+  assert.equal(stillSurviving?.id, survivor.id, 'the unchanged hard-link path must remain indexed');
+  assert.equal(after.vault_files.rows.some(row => row.path === join(vault, 'old', 'Shared.md')), false);
+  assert.equal(after.vault_index_state.rows[0].derived_data_dirty, 0);
+  assert.deepEqual(JSON.parse(execFileSync(PYTHON, ['-c', FOREIGN_KEYS_SCRIPT, database], { encoding: 'utf8' })), []);
+});
+
+test('does not preserve a legacy null-device file identity across a move', async () => {
+  const vault = await makeVault('legacy-move-null-device', {
+    'legacy.md': '# Legacy identity\n',
+  });
+  const database = join(workRoot, 'legacy-move-null-device.db');
+  await createLegacy(database, vault);
+  const before = rawSnapshot(database);
+  const legacy = before.vault_files.rows.find(row => row.path === join(vault, 'legacy.md'));
+  await rename(join(vault, 'legacy.md'), join(vault, 'moved.md'));
+
+  await indexVault(vault, database);
+  const after = rawSnapshot(database);
+  const moved = after.vault_files.rows.find(row => row.path === join(vault, 'moved.md'));
+  assert(moved);
+  assert.notEqual(moved.id, legacy.id);
+  assert.equal(after.vault_files.rows.some(row => row.path === join(vault, 'legacy.md')), false);
+  assert.deepEqual(JSON.parse(execFileSync(PYTHON, ['-c', FOREIGN_KEYS_SCRIPT, database], { encoding: 'utf8' })), []);
+});
+
+test('falls back to normal indexing when a moved file changes mtime or effective kind', async () => {
+  const vault = await makeVault('move-metadata-fallback', {
+    'old/ChangedTime.md': '# Changed mtime\n',
+    'old/ChangedKind.md': '---\ntags: [excalidraw]\n---\n# Changed kind\n',
+  });
+  const database = join(workRoot, 'move-metadata-fallback.db');
+  await indexVault(vault, database);
+  const before = rawSnapshot(database);
+  const oldTime = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'ChangedTime.md'));
+  const oldKind = before.vault_files.rows.find(row => row.path === join(vault, 'old', 'ChangedKind.md'));
+  await rename(join(vault, 'old', 'ChangedTime.md'), join(vault, 'ChangedTime.md'));
+  setMtimeNs(join(vault, 'ChangedTime.md'), BigInt(oldTime.mtime_ns) + 1_000_000n);
+  await rename(join(vault, 'old', 'ChangedKind.md'), join(vault, 'ChangedKind.py'));
+
+  await indexVault(vault, database);
+  const after = rawSnapshot(database);
+  const changedTime = after.vault_files.rows.find(row => row.path === join(vault, 'ChangedTime.md'));
+  const changedKind = after.vault_files.rows.find(row => row.path === join(vault, 'ChangedKind.py'));
+  assert(changedTime);
+  assert(changedKind);
+  assert.notEqual(changedTime.id, oldTime.id);
+  assert.notEqual(changedKind.id, oldKind.id);
+  assert.equal(changedKind.kind, 'script');
+  assert.equal(after.vault_index_state.rows[0].derived_data_dirty, 0);
 });
 
 test('matches the Python oracle on a generated nine-note YAML fixture', async () => {
