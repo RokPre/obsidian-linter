@@ -123,11 +123,13 @@ function sharedSchemaSnapshot(snapshot) {
         ? sql.replace(", 'ignored', 'ambiguous_ignored')", ')')
         : name === 'vault_index_state'
           ? sql.replace(', ignored_file_paths_snapshot text', '')
-          : sql,
+          : name === 'vault_files' ? sql.replace(/, (?:st_dev|device) integer/g, '') : sql,
     ]),
     tableColumns: Object.fromEntries(Object.entries(snapshot.tableColumns).map(([name, values]) => [
       name,
-      name === 'vault_index_state' ? values.filter((column) => column !== 'ignored_file_paths_snapshot') : values,
+      name === 'vault_index_state'
+        ? values.filter((column) => column !== 'ignored_file_paths_snapshot')
+        : name === 'vault_files' ? values.filter((column) => column !== 'st_dev' && column !== 'device') : values,
     ])),
   };
 }
@@ -221,11 +223,16 @@ test('fresh initializer matches shared Python schema and exposes the complete co
   const { database, cursor } = fresh();
   const actual = schemaSnapshot(cursor);
   const expected = pythonFreshSnapshot(join(workRoot, 'python-fresh.db'));
-  assert.deepEqual(sharedSchemaSnapshot(actual), expected);
+  assert.deepEqual(sharedSchemaSnapshot(actual), sharedSchemaSnapshot(expected));
   assert.deepEqual(resolutionStatuses(cursor), [
     'resolved', 'missing', 'ambiguous', 'external', 'missing_fragment', 'ignored', 'ambiguous_ignored',
   ]);
 
+  assert.deepEqual(columns(cursor, 'vault_files'), [
+    'id', 'directory_id', 'path', 'name', 'inode', 'device', 'mtime_ns', 'extension', 'kind',
+  ]);
+  assert.equal(rows(cursor, 'PRAGMA table_info(vault_files)').find((row) => row[1] === 'device')[3], 0,
+    'device is nullable so legacy identity remains unverified');
   assert.deepEqual(columns(cursor, 'note_tag_occurrences'), [
     'id', 'tag_id', 'frontmatter_node_id', 'markdown_node_id',
   ]);
@@ -282,6 +289,38 @@ test('adds mtime_ns to the legacy vault_files table with a zero default and pres
   database.close();
 });
 
+
+test('adds nullable device identity to legacy files idempotently without fabricating values', () => {
+  const database = new SQL.Database();
+  database.run('PRAGMA foreign_keys = ON');
+  const cursor = new indexer.Cursor(database);
+  cursor.executescript(`
+    CREATE TABLE vault_directories (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, inode INTEGER NOT NULL, parent_id INTEGER REFERENCES vault_directories(id));
+    INSERT INTO vault_directories VALUES (1, '/vault', 1, NULL);
+    CREATE TABLE vault_index_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1), derived_data_dirty INTEGER NOT NULL,
+      block_ids_version INTEGER NOT NULL, link_resolution_version INTEGER NOT NULL,
+      tag_occurrence_version INTEGER NOT NULL, fenced_code_version INTEGER NOT NULL,
+      callout_version INTEGER NOT NULL, ignored_file_paths_snapshot TEXT
+    );
+    INSERT INTO vault_index_state VALUES (1, 0, 1, 5, 1, 1, 1, NULL);
+    CREATE TABLE vault_files (id INTEGER PRIMARY KEY, directory_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, inode INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, extension TEXT NOT NULL, kind TEXT NOT NULL);
+    INSERT INTO vault_files VALUES (7, 1, '/vault/note.md', 'note', 22, 123, '.md', 'markdown');
+  `);
+  indexer.initialize_database(cursor);
+  assert.deepEqual(rows(cursor, 'SELECT id, path, inode, device, mtime_ns FROM vault_files'), [
+    [7, '/vault/note.md', 22, null, 123],
+  ]);
+  const firstColumns = columns(cursor, 'vault_files');
+  indexer.initialize_database(cursor);
+  indexer.initialize_database(cursor);
+  assert.deepEqual(columns(cursor, 'vault_files'), firstColumns);
+  assert.deepEqual(rows(cursor, 'SELECT id, path, inode, device, mtime_ns FROM vault_files'), [
+    [7, '/vault/note.md', 22, null, 123],
+  ]);
+  assert.deepEqual(rows(cursor, 'PRAGMA foreign_key_check'), []);
+  database.close();
+});
 test('rebuilds legacy provenance occurrences, adds uniqueness indexes, and marks derived data dirty', () => {
   const { database, cursor } = fresh();
   cursor.execute('DROP INDEX note_tag_occurrences_tag_idx');

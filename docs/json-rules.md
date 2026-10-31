@@ -5,9 +5,9 @@
 1. Copy the repository's [`rules.example.json`](../rules.example.json) into the active vault. Rename it if useful.
 2. In plugin settings, enter its vault-relative path in **Rules JSON file**. Path suggestions are available.
 3. Edit the JSON using the version 1 schema and checks described in [Linter checks and JSON rules](../CHECKS.md).
-4. Use **Read/Validate** to validate the configuration and match its rule scopes against indexed files. Use **Run checks** when you are ready to execute enabled rules.
+4. Use **Read/validate** to validate the configuration and match its rule scopes against indexed files. Use **Run checks** when you are ready to execute enabled rules.
 
-Both actions are explicit settings actions; neither runs on startup or automatically after a file edit. **Read/Validate** reads and validates the whole configuration, including disabled rules, then matches rules to indexed files. It does not execute checks or produce findings. Invalid JSON or any invalid rule rejects the entire configuration. Scope selects files by kind and vault-relative `include`/`exclude` patterns; only indexed files can match, and a folder pattern selects files beneath it rather than the folder itself.
+Both actions are explicit settings actions; neither runs on startup or automatically after a file edit. **Read/validate** reads and validates the whole configuration, including disabled rules, then matches rules to indexed files. It does not execute checks or produce findings. Invalid JSON or any invalid rule rejects the entire configuration. Scope selects files by kind and vault-relative `include`/`exclude` patterns; only indexed files can match, and a folder pattern selects files beneath it rather than the folder itself.
 
 ## Run checks
 
@@ -19,4 +19,4 @@ The action uses the existing persisted index only when it is present and `vault_
 
 Findings are logged as structured diagnostics in the console. Index-read/readiness and rule-level failures are reported separately from findings; a failed rule does not become a finding, and other rules continue. Any rule failure makes the run partial/failed rather than clean. The console summary includes finding and failure counts. No findings window or sidebar is opened.
 
-The **Read/Validate** matching action and **Run checks** currently require Obsidian desktop; unsupported file-system adapters produce an error. The three supported checks are `requiredFrontmatterProperty`, `filenameCase`, and `unresolvedInternalLinks`. The full reference describes their options and edge cases, including index-relative link resolution and source-vs-target scope.
+The **Read/validate** matching action and **Run checks** currently require Obsidian desktop; unsupported file-system adapters produce an error. The three supported checks are `requiredFrontmatterProperty`, `filenameCase`, and `unresolvedInternalLinks`. The full reference describes their options and edge cases, including index-relative link resolution and source-vs-target scope.

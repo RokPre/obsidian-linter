@@ -142,6 +142,7 @@ export function initialize_database(cursor: Cursor): void {
             path TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             inode INTEGER NOT NULL,
+            device INTEGER,
             mtime_ns INTEGER NOT NULL,
             extension TEXT NOT NULL,
             kind TEXT NOT NULL CHECK (
@@ -341,6 +342,9 @@ export function initialize_database(cursor: Cursor): void {
 			.fetchall()
 			.map((column) => String(column[1]!)),
 	);
+	if (!noteColumns.has("device")) {
+		cursor.execute("ALTER TABLE vault_files ADD COLUMN device INTEGER");
+	}
 	if (!noteColumns.has("mtime_ns")) {
 		cursor.execute("ALTER TABLE vault_files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0");
 	}
@@ -545,12 +549,98 @@ export interface ParsedFrontmatter {
 export interface ParsedFile {
 	path: string;
 	inode: bigint;
+	device: bigint;
 	mtime_ns: bigint;
 	kind: string;
 	frontmatter_source: string;
 	frontmatter_result: ParsedFrontmatter | null;
 	syntax_tree: MarkdownNode | null;
 }
+/**
+ * Candidate metadata consumed by match_file_moves. The caller must classify
+ * created paths with the plugin's effective-kind parser and mark regular only
+ * after a non-following file-type check; null/unsafe identity values are
+ * deliberately ineligible. The indexing flow consumes matches while leaving
+ * all unmatched changes on the existing delete-and-index path.
+ */
+export interface MoveMatchFile {
+	path: string;
+	device: bigint | number | string | null;
+	inode: bigint | number | string | null;
+	mtime_ns: bigint | number | string | null;
+	kind: string | null;
+	regular: boolean;
+}
+
+function exactNonnegativeInteger(value: MoveMatchFile['device']): bigint | null {
+	if (typeof value === 'bigint') return value >= 0n ? value : null;
+	if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+	if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) return null;
+	try {
+		return BigInt(value);
+	} catch {
+		return null;
+	}
+}
+
+function exactSignedInteger(value: MoveMatchFile['mtime_ns']): bigint | null {
+	if (typeof value === 'bigint') return value;
+	if (typeof value === 'number') return Number.isSafeInteger(value) ? BigInt(value) : null;
+	if (typeof value !== 'string' || !/^(0|-?[1-9]\d*)$/.test(value)) return null;
+	try {
+		return BigInt(value);
+	} catch {
+		return null;
+	}
+}
+
+function moveIdentity(file: MoveMatchFile): string | null {
+	const device = exactNonnegativeInteger(file.device);
+	const inode = exactNonnegativeInteger(file.inode);
+	return device === null || inode === null ? null : `${device}:${inode}`;
+}
+
+/**
+ * Return only unambiguous deleted-to-created matches. Inputs represent the
+ * scan's deleted, created, and still-indexed paths; source/destination kinds
+ * must already be established using the plugin's effective-kind semantics.
+ */
+export function match_file_moves(
+	deleted: readonly MoveMatchFile[],
+	created: readonly MoveMatchFile[],
+	unchanged: readonly MoveMatchFile[],
+): Array<{ source: MoveMatchFile; destination: MoveMatchFile }> {
+	const groups = new Map<string, { deleted: MoveMatchFile[]; created: MoveMatchFile[]; unchanged: number }>();
+	const groupFor = (file: MoveMatchFile) => {
+		const identity = moveIdentity(file);
+		if (identity === null) return null;
+		let group = groups.get(identity);
+		if (group === undefined) {
+			group = { deleted: [], created: [], unchanged: 0 };
+			groups.set(identity, group);
+		}
+		return group;
+	};
+	for (const file of deleted) groupFor(file)?.deleted.push(file);
+	for (const file of created) groupFor(file)?.created.push(file);
+	for (const file of unchanged) {
+		const group = groupFor(file);
+		if (group !== null) group.unchanged++;
+	}
+
+	const matches: Array<{ source: MoveMatchFile; destination: MoveMatchFile }> = [];
+	for (const group of groups.values()) {
+		if (group.deleted.length !== 1 || group.created.length !== 1 || group.unchanged !== 0) continue;
+		const source = group.deleted[0]!;
+		const destination = group.created[0]!;
+		if (!destination.regular || source.kind === null || destination.kind === null || source.kind !== destination.kind) continue;
+		const sourceMtime = exactSignedInteger(source.mtime_ns);
+		if (sourceMtime === null || sourceMtime !== exactSignedInteger(destination.mtime_ns)) continue;
+		matches.push({ source, destination });
+	}
+	return matches;
+}
+
 
 export interface MarkdownPosition {
 	line: number;
@@ -603,7 +693,7 @@ function linesWithEndings(source: string): string[] {
 }
 
 export function get_frontmatter(source_bytes: Uint8Array | string): [string[], boolean] | null {
-	const source = typeof source_bytes === "string" ? source_bytes : decodeUtf8(Buffer.from(source_bytes));
+	const source = typeof source_bytes === "string" ? source_bytes : decodeUtf8(source_bytes);
 	const lines = linesWithEndings(source);
 	if (lines.length === 0 || lines[0]!.replace(/[\r\n]+$/, "") !== "---") return null;
 	const source_frontmatter: string[] = [];
@@ -919,17 +1009,8 @@ export class MarkdownTreeParser {
 	}
 }
 
-export function parse_file(filePath: string, markdown_parser: MarkdownTreeParser): ParsedFile {
-	const file_stat = fs.statSync(filePath, { bigint: true });
-	const suffix = graph_python_suffix(filePath).toLowerCase();
-	const name = path.basename(filePath);
-	const kind = name.toLowerCase().endsWith("excalidraw.md") ? "excalidraw" : (FILE_KIND_BY_EXTENSION[suffix] ?? "other");
-	const parsed: ParsedFile = { path: filePath, inode: file_stat.ino, mtime_ns: file_stat.mtimeNs, kind, frontmatter_source: "", frontmatter_result: null, syntax_tree: null };
-	if (kind !== "markdown") return parsed;
+function parse_file_bytes(parsed: ParsedFile, source_bytes: Uint8Array, markdown_parser: MarkdownTreeParser): ParsedFile {
 	let started = performance.now();
-	const source_bytes = fs.readFileSync(filePath);
-	record_timing("read_bytes", started, "file");
-	started = performance.now();
 	const frontmatter = get_frontmatter(source_bytes);
 	record_timing("get_frontmatter", started, "file");
 	if (frontmatter !== null) {
@@ -954,14 +1035,58 @@ export function parse_file(filePath: string, markdown_parser: MarkdownTreeParser
 	return parsed;
 }
 
-export function insert_file(cursor: Cursor, parsed: ParsedFile, directory_id: number): number {
-	const filePath = parsed.path;
+function parsed_file_metadata(filePath: string, file_stat: fs.BigIntStats): ParsedFile {
+	const suffix = graph_python_suffix(filePath).toLowerCase();
+	const name = path.basename(filePath);
+	const kind = name.toLowerCase().endsWith("excalidraw.md") ? "excalidraw" : (FILE_KIND_BY_EXTENSION[suffix] ?? "other");
+	return { path: filePath, inode: file_stat.ino, device: file_stat.dev, mtime_ns: file_stat.mtimeNs, kind, frontmatter_source: "", frontmatter_result: null, syntax_tree: null };
+}
+function parse_file_candidate(filePath: string, candidate_stat: fs.BigIntStats, markdown_parser: MarkdownTreeParser): ParsedFile {
+	const nofollow = fs.constants.O_NOFOLLOW;
+	const nonblock = fs.constants.O_NONBLOCK;
+	if (typeof nofollow !== "number" || typeof nonblock !== "number") throw new Error("Safe nonblocking candidate open flags are unavailable");
+	const fd = fs.openSync(filePath, fs.constants.O_RDONLY | nofollow | nonblock);
+	try {
+		const opened_stat = fs.fstatSync(fd, { bigint: true });
+		if (!opened_stat.isFile()
+			|| opened_stat.dev !== candidate_stat.dev
+			|| opened_stat.ino !== candidate_stat.ino
+			|| opened_stat.mtimeNs !== candidate_stat.mtimeNs) {
+			throw new Error("Candidate changed before safe classification");
+		}
+		const parsed = parsed_file_metadata(filePath, opened_stat);
+		if (parsed.kind !== "markdown") return parsed;
+		const started = performance.now();
+		const source_bytes = fs.readFileSync(fd);
+		record_timing("read_bytes", started, "file");
+		return parse_file_bytes(parsed, source_bytes, markdown_parser);
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+export function parse_file(filePath: string, markdown_parser: MarkdownTreeParser): ParsedFile {
+	const file_stat = fs.statSync(filePath, { bigint: true });
+	const parsed = parsed_file_metadata(filePath, file_stat);
+	if (parsed.kind !== "markdown") return parsed;
+	const started = performance.now();
+	const source_bytes = fs.readFileSync(filePath);
+	record_timing("read_bytes", started, "file");
+	return parse_file_bytes(parsed, source_bytes, markdown_parser);
+}
+
+function indexed_file_name_and_extension(filePath: string): [string, string] {
 	const suffix = graph_python_suffix(filePath);
 	const extension = suffix === "." ? "" : suffix.toLowerCase();
-	const name = path.basename(filePath, extension === "" ? "" : suffix);
+	return [path.basename(filePath, extension === "" ? "" : suffix), extension];
+}
+
+export function insert_file(cursor: Cursor, parsed: ParsedFile, directory_id: number): number {
+	const filePath = parsed.path;
+	const [name, extension] = indexed_file_name_and_extension(filePath);
 	cursor.execute(
-		"INSERT INTO vault_files (directory_id, path, name, inode, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET directory_id = excluded.directory_id, name = excluded.name, inode = excluded.inode, mtime_ns = excluded.mtime_ns, extension = excluded.extension, kind = excluded.kind RETURNING id",
-		[directory_id, filePath, name, parsed.inode, parsed.mtime_ns, extension, parsed.kind],
+		"INSERT INTO vault_files (directory_id, path, name, inode, device, mtime_ns, extension, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET directory_id = excluded.directory_id, name = excluded.name, inode = excluded.inode, device = excluded.device, mtime_ns = excluded.mtime_ns, extension = excluded.extension, kind = excluded.kind RETURNING id",
+		[directory_id, filePath, name, parsed.inode, parsed.device, parsed.mtime_ns, extension, parsed.kind],
 	);
 	const row = cursor.fetchone();
 	if (row === null || row[0] === undefined || row[0] === null) throw new Error("Failed to insert vault file");
@@ -1823,11 +1948,8 @@ async function index_vault_once(
 		const derived_data_dirty = Boolean(cursor.execute('SELECT derived_data_dirty FROM vault_index_state WHERE id = 1').fetchone()![0]) || inventory_changed;
 		const [changed_directories, changed_files] = find_changes(cursor, vault_path, config_dir);
 		let added_files = 0;
-		for (const [action] of changed_files) {
-			if (action === 'created') added_files++;
-		}
 		const directories_to_insert = changed_directories.filter(([action]) => action === 'created' || action === 'modified').map(([, directory]) => directory);
-		const files_to_index = changed_files.filter(([action]) => action === 'created' || action === 'modified').map(([, file]) => file);
+		let files_to_index = changed_files.filter(([action]) => action === 'created' || action === 'modified').map(([, file]) => file);
 		if (!derived_data_dirty && cursor.execute('SELECT 1 FROM vault_links LIMIT 1').fetchone() === null) {
 			const link_file_paths = cursor.execute(`
 				SELECT DISTINCT vault_files.path
@@ -1840,10 +1962,118 @@ async function index_vault_once(
 				if (typeof file === 'string' && !indexed_paths.has(file)) files_to_index.push(file);
 			}
 		}
-		onProgress?.({ phase: 'indexing', completed: 0, total: files_to_index.length });
 		const indexed_file_ids: number[] = [];
-		const file_paths_to_delete = changed_files.filter(([action]) => action === 'deleted').map(([, file]) => file);
+		let file_paths_to_delete = changed_files.filter(([action]) => action === 'deleted').map(([, file]) => file);
 		const directory_paths_to_delete = changed_directories.filter(([action]) => action === 'deleted').map(([, directory]) => directory);
+		const file_changes_by_path = new Map(changed_files.map(([action, file]) => [file, action]));
+		const created_candidates: MoveMatchFile[] = [];
+		const parsed_created = new Map<string, ParsedFile>();
+		const deleted_rows: SqlValue[][] = [];
+		for (let start = 0; start < file_paths_to_delete.length; start += 400) {
+			const batch = file_paths_to_delete.slice(start, start + 400);
+			deleted_rows.push(...cursor.execute(
+				`SELECT path, CAST(device AS TEXT), CAST(inode AS TEXT), CAST(mtime_ns AS TEXT), kind FROM vault_files WHERE path IN (${batch.map(() => '?').join(',')})`,
+				batch,
+			).fetchall());
+		}
+		const deleted_candidates: MoveMatchFile[] = deleted_rows.map(row => ({
+			path: String(row[0]),
+			device: row[1] as string | null,
+			inode: row[2] as string | null,
+			mtime_ns: row[3] as string | null,
+			kind: typeof row[4] === 'string' ? row[4] : null,
+			regular: true,
+		}));
+		const deleted_identities = new Set(deleted_candidates.map(file => `${file.device}:${file.inode}`));
+		for (const file of files_to_index) {
+			if (deleted_candidates.length === 0) continue;
+			if (file_changes_by_path.get(file) !== 'created') continue;
+			let candidate_stat: fs.BigIntStats;
+			try {
+				candidate_stat = fs.lstatSync(file, { bigint: true });
+			} catch {
+				files_to_index = files_to_index.filter(candidate => candidate !== file);
+				continue;
+			}
+			if (!candidate_stat.isFile()) {
+				files_to_index = files_to_index.filter(candidate => candidate !== file);
+				continue;
+			}
+			if (!deleted_identities.has(`${candidate_stat.dev}:${candidate_stat.ino}`)) continue;
+			if (typeof fs.constants.O_NOFOLLOW !== 'number' || typeof fs.constants.O_NONBLOCK !== 'number') {
+				throw new Error("Safe nonblocking open flags are unavailable for a move candidate; scan deferred to preserve indexed data");
+			}
+			let parsed: ParsedFile;
+			try {
+				parsed = parse_file_candidate(file, candidate_stat, markdown_parser);
+			} catch (error) {
+				// A failed safe open can be a non-regular replacement. Never fall
+				// back to reading this path unless a fresh no-follow open succeeds.
+				let replacement_stat: fs.BigIntStats;
+				try {
+					replacement_stat = fs.lstatSync(file, { bigint: true });
+				} catch {
+					files_to_index = files_to_index.filter(candidate => candidate !== file);
+					continue;
+				}
+				if (!replacement_stat.isFile()) {
+					files_to_index = files_to_index.filter(candidate => candidate !== file);
+					continue;
+				}
+				try {
+					parsed = parse_file_candidate(file, replacement_stat, markdown_parser);
+				} catch {
+					throw error;
+				}
+			}
+			parsed_created.set(file, parsed);
+			created_candidates.push({ path: file, device: parsed.device, inode: parsed.inode, mtime_ns: parsed.mtime_ns, kind: parsed.kind, regular: true });
+		}
+		const changed_paths = new Set(changed_files.map(([, file]) => file));
+		const unchanged_candidates: MoveMatchFile[] = [];
+		if (deleted_candidates.length > 0 && created_candidates.length > 0) {
+			const identity_pairs = new Map<string, [string, string]>();
+			for (const file of created_candidates) {
+				const identity = `${file.device}:${file.inode}`;
+				identity_pairs.set(identity, [String(file.device), String(file.inode)]);
+			}
+			cursor.execute('CREATE TEMP TABLE move_candidate_identities (device TEXT NOT NULL, inode TEXT NOT NULL, PRIMARY KEY (device, inode)) WITHOUT ROWID');
+			const identities = [...identity_pairs.values()];
+			for (let start = 0; start < identities.length; start += 400) {
+				const batch = identities.slice(start, start + 400);
+				const placeholders = batch.map(() => '(?, ?)').join(', ');
+				const params: string[] = [];
+				for (const [device, inode] of batch) params.push(device, inode);
+				cursor.execute(`INSERT OR IGNORE INTO move_candidate_identities (device, inode) VALUES ${placeholders}`, params);
+			}
+			const unchanged_rows = cursor.execute(
+				`SELECT path, CAST(device AS TEXT), CAST(inode AS TEXT), CAST(mtime_ns AS TEXT), kind
+				 FROM vault_files
+				 WHERE EXISTS (
+					SELECT 1 FROM move_candidate_identities
+					WHERE CAST(vault_files.device AS TEXT) = move_candidate_identities.device
+					AND CAST(vault_files.inode AS TEXT) = move_candidate_identities.inode
+				 )`,
+			).fetchall();
+			cursor.execute('DROP TABLE move_candidate_identities');
+			for (const row of unchanged_rows) {
+				if (typeof row[0] !== 'string' || changed_paths.has(row[0])) continue;
+				unchanged_candidates.push({
+					path: row[0],
+					device: row[1] as string | null,
+					inode: row[2] as string | null,
+					mtime_ns: row[3] as string | null,
+					kind: typeof row[4] === 'string' ? row[4] : null,
+					regular: true,
+				});
+			}
+		}
+		const move_candidates = match_file_moves(deleted_candidates, created_candidates, unchanged_candidates);
+		const moves_to_reconcile: Array<{ source: MoveMatchFile; destination: MoveMatchFile; parsed: ParsedFile }> = [];
+		for (const candidate of move_candidates) {
+			const parsed = parsed_created.get(candidate.destination.path);
+			if (parsed !== undefined) moves_to_reconcile.push({ ...candidate, parsed });
+		}
 		const has_file_changes = files_to_index.length > 0 || file_paths_to_delete.length > 0;
 		if (has_file_changes || inventory_changed) cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 1 WHERE id = 1');
 
@@ -1856,22 +2086,130 @@ async function index_vault_once(
 			`, [directory, fs.statSync(directory, { bigint: true }).ino, parent_id]);
 		}
 
+		for (const candidate of moves_to_reconcile) {
+			let parsed = candidate.parsed;
+			const destination_path = candidate.destination.path;
+			const [name, extension] = indexed_file_name_and_extension(destination_path);
+			const directory_id = cursor.execute('SELECT id FROM vault_directories WHERE path = ?', [path.dirname(destination_path)]).fetchone()?.[0];
+			if (directory_id === undefined || directory_id === null) {
+				parsed_created.delete(destination_path);
+				continue;
+			}
+			let destination_stat: fs.BigIntStats;
+			try {
+				destination_stat = fs.lstatSync(destination_path, { bigint: true });
+			} catch {
+				parsed_created.delete(destination_path);
+				files_to_index = files_to_index.filter(file => file !== destination_path);
+				continue;
+			}
+			if (!destination_stat.isFile()) {
+				parsed_created.delete(destination_path);
+				files_to_index = files_to_index.filter(file => file !== destination_path);
+				continue;
+			}
+			if (
+				destination_stat.dev !== BigInt(candidate.destination.device!) ||
+				destination_stat.ino !== BigInt(candidate.destination.inode!) ||
+				destination_stat.mtimeNs !== BigInt(candidate.destination.mtime_ns!) ||
+				parsed.device !== destination_stat.dev ||
+				parsed.inode !== destination_stat.ino ||
+				parsed.mtime_ns !== destination_stat.mtimeNs
+			) {
+				try {
+					parsed = parse_file_candidate(destination_path, destination_stat, markdown_parser);
+					parsed_created.set(destination_path, parsed);
+				} catch (error) {
+					let still_regular = false;
+					try {
+						still_regular = fs.lstatSync(destination_path, { bigint: true }).isFile();
+					} catch {
+						// The destination vanished or became inaccessible.
+					}
+					if (still_regular) throw error;
+					parsed_created.delete(destination_path);
+					files_to_index = files_to_index.filter(file => file !== destination_path);
+				}
+				continue;
+			}
+			const updated = cursor.execute(
+				`UPDATE vault_files
+				SET directory_id = ?, path = ?, name = ?, inode = ?, device = ?, mtime_ns = ?, extension = ?, kind = ?
+				WHERE path = ? RETURNING id`,
+				[directory_id, destination_path, name, parsed.inode, parsed.device, parsed.mtime_ns, extension, parsed.kind, candidate.source.path],
+			).fetchone();
+			if (updated === null) {
+				parsed_created.delete(destination_path);
+				continue;
+			}
+			files_to_index = files_to_index.filter(file => file !== destination_path);
+			file_paths_to_delete = file_paths_to_delete.filter(file => file !== candidate.source.path);
+		}
+		for (const file of files_to_index) {
+			if (file_changes_by_path.get(file) === 'created') added_files++;
+		}
+		onProgress?.({ phase: 'indexing', completed: 0, total: files_to_index.length });
+
 		if (files_to_index.length) {
 			console.debug(`Indexing ${files_to_index.length} files`);
-			for (let index = 0; index < files_to_index.length; index++) {
-				const file_path = files_to_index[index]!;
-				const parsed_file = parse_file(file_path, markdown_parser);
-				const directory_id = Number(cursor.execute('SELECT id FROM vault_directories WHERE path = ?', [path.dirname(file_path)]).fetchone()![0]);
-				indexed_file_ids.push(insert_file(cursor, parsed_file, directory_id));
+			const files_to_process = [...files_to_index];
+			for (let index = 0; index < files_to_process.length; index++) {
+				const file_path = files_to_process[index]!;
+				let parsed_file = parsed_created.get(file_path);
+				let skip_file = false;
+				if (parsed_file !== undefined) {
+					let current_stat: fs.BigIntStats;
+					try {
+						current_stat = fs.lstatSync(file_path, { bigint: true });
+					} catch {
+						parsed_file = undefined;
+						skip_file = true;
+					}
+					if (parsed_file !== undefined && !current_stat!.isFile()) {
+						parsed_file = undefined;
+						skip_file = true;
+					}
+					if (
+						parsed_file !== undefined
+						&& (parsed_file.device !== current_stat!.dev
+							|| parsed_file.inode !== current_stat!.ino
+							|| parsed_file.mtime_ns !== current_stat!.mtimeNs)
+					) {
+						try {
+							parsed_file = parse_file_candidate(file_path, current_stat!, markdown_parser);
+							parsed_created.set(file_path, parsed_file);
+						} catch (error) {
+							let still_regular = false;
+							try {
+								still_regular = fs.lstatSync(file_path, { bigint: true }).isFile();
+							} catch {
+								// The replacement vanished or became inaccessible.
+							}
+							if (still_regular) throw error;
+							parsed_file = undefined;
+							skip_file = true;
+						}
+					}
+					if (skip_file) {
+						parsed_created.delete(file_path);
+						files_to_index = files_to_index.filter(candidate => candidate !== file_path);
+						if (file_changes_by_path.get(file_path) === 'created') added_files--;
+					}
+				}
+				if (!skip_file) {
+					parsed_file ??= parse_file(file_path, markdown_parser);
+					const directory_id = Number(cursor.execute('SELECT id FROM vault_directories WHERE path = ?', [path.dirname(file_path)]).fetchone()![0]);
+					indexed_file_ids.push(insert_file(cursor, parsed_file, directory_id));
+				}
 				const completed = index + 1;
-				if (completed % 25 === 0 || completed === files_to_index.length) {
-					onProgress?.({ phase: 'indexing', completed, total: files_to_index.length });
+				if (completed % 25 === 0 || completed === files_to_process.length) {
+					onProgress?.({ phase: 'indexing', completed, total: files_to_process.length });
 				}
 				if ((index + 1) % INDEX_BATCH_SIZE === 0) {
 					commit();
-					if (index + 1 < files_to_index.length) cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 1 WHERE id = 1');
+					if (index + 1 < files_to_process.length) cursor.execute('UPDATE vault_index_state SET derived_data_dirty = 1 WHERE id = 1');
 				}
-				if ((index + 1) % 1_000 === 0 || index + 1 === files_to_index.length) console.debug(`Indexed ${index + 1}/${files_to_index.length} files`);
+				if ((index + 1) % 1_000 === 0 || index + 1 === files_to_process.length) console.debug(`Indexed ${index + 1}/${files_to_process.length} files`);
 				// Keep one file's AST in memory and allow Obsidian to process UI events.
 				if ((index + 1) % 25 === 0) await new Promise<void>(resolve => self.setTimeout(resolve, 0));
 			}

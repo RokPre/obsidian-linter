@@ -514,7 +514,7 @@ app.whenReady().then(async () => {
 		assert.ok(payload.value.buttons.includes('Index vault'));
 		assert.equal(payload.value.removeTooltip, 'Remove from blacklist');
 		assert.ok(payload.value.settingNames.includes('Blacklist for files and folders'));
-		assert.ok(payload.value.buttons.includes('Read/Validate'));
+		assert.ok(payload.value.buttons.includes('Read/validate'));
 		assert.ok(payload.value.settingNames.includes('Rules JSON file'));
 		assert.equal(payload.value.rulesFileReadCount, 0);
 		assert.equal(payload.value.rulesFileModifyRequestCount, 1);
