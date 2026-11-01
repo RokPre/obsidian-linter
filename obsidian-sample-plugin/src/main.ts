@@ -7,6 +7,8 @@ import {
 	Notice,
 	Plugin,
 	TFile,
+	WorkspaceLeaf,
+	WorkspaceSidedock,
 } from 'obsidian';
 import { DiagnosticsView, DIAGNOSTICS_VIEW_TYPE, type DiagnosticsOutcome } from './diagnostics-view';
 import type { RuleDiagnostic } from './rules-engine';
@@ -184,18 +186,33 @@ export default class ObsidianLinterPlugin extends Plugin {
 		}
 	}
 
+	private expandDiagnosticsDock(leaf: WorkspaceLeaf) {
+		const workspace = this.app.workspace;
+		let parent = leaf.parent;
+		while (parent) {
+			if (parent instanceof WorkspaceSidedock &&
+				(parent === workspace.leftSplit || parent === workspace.rightSplit)) {
+				parent.expand();
+				return;
+			}
+			parent = parent.parent;
+		}
+	}
+
 	private async openDiagnosticsView(side: 'left' | 'right') {
 		const workspace = this.app.workspace;
 		const existing = workspace.getLeavesOfType(DIAGNOSTICS_VIEW_TYPE)[0];
 		if (existing) {
-			await workspace.revealLeaf(existing);
+			this.expandDiagnosticsDock(existing);
+			workspace.setActiveLeaf(existing, { focus: true });
 			return;
 		}
 
 		const leaf = side === 'right' ? workspace.getRightLeaf(false) : workspace.getLeftLeaf(false);
 		if (!leaf) return;
 		await leaf.setViewState({ type: DIAGNOSTICS_VIEW_TYPE, active: true });
-		await workspace.revealLeaf(leaf);
+		this.expandDiagnosticsDock(leaf);
+		workspace.setActiveLeaf(leaf, { focus: true });
 	}
 
 	onunload() {

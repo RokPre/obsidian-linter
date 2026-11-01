@@ -1,26 +1,214 @@
 # TODOs
 
-- [ ] TODO: Detect moves where inode is the same but file is deleted and created. [detect_moves_where](#detect_moves_where)
-  - [ ] TODO: Review and retain carried project navigation setup [move_setup](#move_setup)
-  - [ ] TODO: Persist file device identity [move_device](#move_device)
-  - [ ] TODO: Match safe file moves [move_match](#move_match)
-  - [ ] TODO: Reconcile matched file moves [move_reconcile](#move_reconcile)
-  - [ ] TODO: Verify moves through the plugin indexer [move_integration](#move_integration)
 - [ ] TODO: Decide where to keep the legacy Python code and move it there. It has served its purpose for indexing, but may still be useful for developing checks; choose a suitable location in the repo that keeps that possible future use separate from the active indexing code. [decide_where_to](#decide_where_to)
-- [ ] TODO: Inspect Obsidian plugin link resolution for targets excluded by the ignored list: determine whether existing-but-ignored files become future/missing links, and define how changing the list should update those links. [inspect_obsidian_plugin](#inspect_obsidian_plugin)
 - [ ] TODO: Unify yaml delimiters. [unify_yaml_delimiters](#unify_yaml_delimiters)
 - [ ] TODO: Modified files have their nodes and source links deleted and reinserted (/home/rok/sync/vaultHelper/obsidian-sample-plugin/src/indexer.ts:894). Database node IDs therefore should not become durable identifiers in saved rules, diagnostics, or future edit plans. Use source-oriented locators and freshness information. A simple path/range plus source revision or fingerprint is a more appropriate starting point than inventing permanent identities for every Markdown node. [modified_files_have](#modified_files_have)
 - [ ] TODO: Test the sql.js file for memory usage, performance, ui stuttering and other possible issues. [test_the_sql](#test_the_sql)
 - [ ] TODO: Run indexing independently of Save completion: persist settings and apply exclusions first, then request indexing without holding Save open; verify the settings remain responsive during long scans. [run_indexing_independently](#run_indexing_independently)
 - [ ] TODO: Add automated worker integration tests for startup, vault events, Save, and Index vault: use the built worker and a temporary vault; verify saved exclusions, result/error replies, one shared worker, responsive parent thread, and shutdown on unload. [add_automated_worker](#add_automated_worker)
 - [ ] TODO: Add settings button interaction tests. [add_settings_button](#add_settings_button)
-  - [ ] TODO: Extend the fake environment to expose each button separately, track picker rows when cleared, and record settings saves. [extend_the_fake](#extend_the_fake)
+  - [x] TODO: Extend the fake environment to expose each button separately, track picker rows when cleared, and record settings saves. [extend_the_fake](#extend_the_fake)
   - [ ] TODO: Test Add: append one blank picker without losing existing values; disable while any picker is blank; use the theme primary color when enabled. [test_add_append](#test_add_append)
   - [ ] TODO: Test Clear: replace all paths with one blank picker and a blank draft entry; keep Add and that picker's × disabled until it is filled; leave saved settings and active exclusions unchanged until Save. [test_clear_replace](#test_clear_replace)
-  - [ ] TODO: Test Save styling: highlight valid unsaved changes; return to normal for invalid or unchanged drafts and after successful saving; ignore blank pickers when comparing changes. [test_save_styling](#test_save_styling)
-  - [ ] TODO: Test Save validation: reject root, missing paths, and duplicates through both the disabled button and a direct handler call, without saving or indexing. [test_save_validation](#test_save_validation)
-  - [ ] TODO: Test successful Save: persist nonblank draft paths, update active exclusions, and request indexing once; Clear followed by Save must persist an empty list. [test_successful_save](#test_successful_save)
-  - [ ] TODO: Test failed persistence: do not update active exclusions or request indexing when saving settings fails. [test_failed_persistence](#test_failed_persistence)
+  - [x] TODO: Test Save styling: highlight valid unsaved changes; return to normal for invalid or unchanged drafts and after successful saving; ignore blank pickers when comparing changes. [test_save_styling](#test_save_styling)
+  - [x] TODO: Test Save validation: reject root, missing paths, and duplicates through both the disabled button and a direct handler call, without saving or indexing. [test_save_validation](#test_save_validation)
+  - [x] TODO: Test successful Save: persist nonblank draft paths, update active exclusions, and request indexing once; Clear followed by Save must persist an empty list. [test_successful_save](#test_successful_save)
+  - [x] TODO: Test failed persistence: do not update active exclusions or request indexing when saving settings fails. [test_failed_persistence](#test_failed_persistence)
+
+## decide_where_to
+
+## unify_yaml_delimiters
+
+## modified_files_have
+
+## test_the_sql
+
+## run_indexing_independently
+
+## add_automated_worker
+
+## add_settings_button
+
+- Children: extend_the_fake & test_add_append & test_clear_replace & test_save_styling & test_save_validation & test_successful_save & test_failed_persistence
+
+## extend_the_fake
+
+## test_add_append
+
+## test_clear_replace
+
+## test_save_styling
+
+## test_save_validation
+
+## test_successful_save
+
+## test_failed_persistence
+
+# DONEs
+
+- [x] DONE: Enable Save only when the ignore-list draft is valid and has unsaved changes; disable it when unchanged, invalid, or successfully saved. Ignore blank pickers when comparing with saved settings. [enable_save_only](#enable_save_only)
+- [x] DONE: Disable Clear when only one blank picker is present; enable it when there are paths or extra rows to clear. [disable_clear_when](#disable_clear_when)
+
+- [x] DONE: Add a diagnostics sidebar for linter findings. [add_a_diagnostics](#add_a_diagnostics)
+  - [x] DONE: Define the view input: rule ID, check, severity, vault-relative file path, message, and optional one-based line. [define_the_view](#define_the_view)
+  - [x] DONE: Register a dedicated Obsidian diagnostics view type. [register_a_dedicated](#register_a_dedicated)
+  - [x] DONE: Add a command to open the diagnostics view in the right sidebar. [add_a_command](#add_a_command)
+  - [x] DONE: Add a command to open the diagnostics view in the left sidebar. [add_a_command_2](#add_a_command_2)
+  - [x] DONE: Reuse an existing diagnostics view when either command is run again. [reuse_an_existing](#reuse_an_existing)
+  - [x] DONE: Add a vertically scrollable results container. [add_a_vertically](#add_a_vertically)
+  - [x] DONE: Render each finding with its rule ID, severity, file path, and message. [render_each_finding](#render_each_finding)
+  - [x] DONE: Display the line number when a finding provides one. [display_the_line](#display_the_line)
+  - [x] DONE: Show an empty-results message when there are no findings. [show_an_empty](#show_an_empty)
+  - [x] DONE: Replace the previous findings when a new health-check result arrives. [replace_the_previous](#replace_the_previous)
+  - [x] DONE: Make finding entries keyboard-accessible buttons. [make_finding_entries](#make_finding_entries)
+  - [x] DONE: Resolve the clicked finding's vault-relative path to an Obsidian file. [resolve_the_clicked](#resolve_the_clicked)
+  - [x] DONE: Open that file in an editor without replacing the diagnostics sidebar. [open_that_file](#open_that_file)
+  - [x] DONE: Convert a supplied one-based line to the editor's zero-based line. [convert_a_supplied](#convert_a_supplied)
+  - [x] DONE: Place the editor cursor on that line and scroll it into view. [place_the_editor](#place_the_editor)
+  - [x] DONE: Open findings without a line normally, without forcing a cursor position. [open_findings_without](#open_findings_without)
+  - [x] DONE: Show a notice instead of throwing if the file no longer exists. [show_a_notice](#show_a_notice)
+  - [x] DONE: Clear view-owned listeners and references when the view closes. [clear_view_owned](#clear_view_owned)
+  - [x] DONE: Verify both sidebar commands open or reuse the diagnostics view. [verify_both_sidebar](#verify_both_sidebar)
+  - [x] DONE: Verify a long findings list scrolls inside the sidebar. [verify_a_long](#verify_a_long)
+  - [x] DONE: Verify clicking a finding with a line opens the correct file and line. [verify_clicking_a](#verify_clicking_a)
+  - [x] DONE: Verify clicking a finding without a line opens the correct file. [verify_clicking_a_2](#verify_clicking_a_2)
+  - [x] DONE: Verify clicking a finding for a deleted file shows the notice. [verify_clicking_a_3](#verify_clicking_a_3)
+- [x] DONE: Detect moves where inode is the same but file is deleted and created. [detect_moves_where](#detect_moves_where)
+  - [x] DONE: Review and retain carried project navigation setup [move_setup](#move_setup)
+  - [x] DONE: Persist file device identity [move_device](#move_device)
+  - [x] DONE: Match safe file moves [move_match](#move_match)
+  - [x] DONE: Reconcile matched file moves [move_reconcile](#move_reconcile)
+  - [x] DONE: Verify moves through the plugin indexer [move_integration](#move_integration)
+- [x] DONE: Inspect Obsidian plugin link resolution for targets excluded by the ignored list: determine whether existing-but-ignored files become future/missing links, and define how changing the list should update those links. [inspect_obsidian_plugin](#inspect_obsidian_plugin)
+## enable_save_only
+
+## disable_clear_when
+
+## add_a_diagnostics
+
+- Children: define_the_view & register_a_dedicated & add_a_command & add_a_command_2 & reuse_an_existing & add_a_vertically & render_each_finding & display_the_line & show_an_empty & replace_the_previous & make_finding_entries & resolve_the_clicked & open_that_file & convert_a_supplied & place_the_editor & open_findings_without & show_a_notice & clear_view_owned & verify_both_sidebar & verify_a_long & verify_clicking_a & verify_clicking_a_2 & verify_clicking_a_3
+
+### Workflow status
+
+**In progress:** Backlog reconciliation and the compatibility correction have been implemented and reviewed; commit-gate and renewed integration review remain before updating PR #11.
+
+### Workflow evidence
+
+- Selected backlog item: `add_a_diagnostics`, from `/home/rok/sync/obsidian-linter/TODO.md` at `b58d0f9c0e4d8a663239db3a41b1c3473964764e`; its child items above preserve the selected request.
+- Original checkout: `/home/rok/sync/obsidian-linter`; worktree: `/home/rok/offline/tmp/obsidian-linter-diagnostics-sidebar`; branch: `feature/diagnostics-sidebar`; remote: `origin`; base: `main`; starting commit: `b58d0f9c0e4d8a663239db3a41b1c3473964764e`.
+- `origin/main` was fetched and the original checkout aligned to it using the user-authorized hard reset. The remote already contained the local navigation additions; the original README's `Read/Validate` wording was replaced by the remote's `Read/validate`.
+- Initial read-only discovery found that the existing diagnostic payload already includes the requested fields and that the settings Run checks handler currently logs results. Discovery was performed before the remote update and must be refreshed against this worktree.
+- User approved moving the unrelated inode-move specification to `docs/inode-move-spec.md` and updating its backlog reference before creating the diagnostics root `SPEC.md`.
+- Requirements specialist found the existing diagnostic payload already has the required fields and identified two unanswered UI decisions: move versus reveal an existing view in the opposite sidebar, and automatically open versus retain results when no view is open. No diagnostics `SPEC.md` was created.
+- User decided that an existing view is revealed in place even when the other side is requested, and that arriving results do not open a closed view; the latest findings are retained.
+- Requirements specialist drafted [SPEC.md](SPEC.md) with DIAG-AC-01–13. Outstanding question: whether a whole-run failure retains prior findings or clears/shows a failed state. No implementation approval.
+- User decided a whole-run failure replaces findings with an explicit failure state; RequirementsFailure added DIAG-AC-14 to [SPEC.md](SPEC.md), retaining the existing error notice.
+- ArchitectureReview independently inspected the specification and current result flow; recommended reusing `RuleDiagnostic` and a narrow settings-to-plugin handoff, with retained outcome separate from view lifecycle. No substantive specification change selected; no tests or builds run.
+- DiagnosticsBreakdown proposed G0–G3 below. Its tracker edit was misdirected to the original checkout; that single unintended change was removed. The plan was integrated in this worktree by the orchestrator.
+- No diagnostics specification, plan, implementation, review, commit, or publication is approved or completed. Next: user review and approval of [SPEC.md](SPEC.md) and the plan below.
+- User approved the diagnostics specification and G0–G3 plan for implementation. This approval does not authorize commits or publication.
+- G0Strategy and G0Implementation verified the preserved inode spec SHA-256 `3ea05646d05d793c8f417e0b5c39f5882396f1dbc5b5125b23df73210de758a6` against the base spec, checked diagnostics spec identity, and checked 33 conventional local Markdown links in README, TOC, and TODO: no missing or case-mismatched links or unresolved fragments. The link checker is not a full Markdown parser; no rendered navigation or tests/build were run. Updated one historical strategy heading to identify the relocated spec. No TOC change selected.
+- G0 dedicated reduction skipped: direct relocation and two reference updates have no meaningful additional complexity. Dedicated polish skipped: G0 has no interactive UI; independent review included static navigation and consistency.
+- G0Review: Accepted, no findings, base `b58d0f9c0e4d8a663239db3a41b1c3473964764e`; reviewed Git blobs: preserved inode spec `c64f0e311cd8776f22ff17605fc4e22ac5617068`, diagnostics SPEC `a71608a07b84f128550388a0a90782474be93e87`, complete TODO `2b2863773ca2cb3fda761b9759e35a66d3a6bc7d`, README `29ed7e9b8988e3370bdaebf665f89104c837ccb9`, TOC `5dc5ddb6fd0495f9764d89de3184154c8325f3d8`. Static review confirmed relocated blob equals base SPEC; no tests, builds, rendered navigation, or interactive behavior were run by reviewer. This verdict covers G0 only.
+- Next: obtain explicit commit authorization, then invoke commit-gate for G0; do not start G1 before that gate passes.
+- User authorized proceeding with implementation and commits; explicitly withheld pull-request publication until separate approval.
+- G0CommitGate: committed `f452abc2ed3d07dff3f169dcb28220bc53f7b5ee` on `feature/diagnostics-sidebar`, parent `b58d0f9c0e4d8a663239db3a41b1c3473964764e`; includes `SPEC.md`, `TODO.md`, and `docs/inode-move-spec.md`. Accepted artifact blobs matched; `git diff --check` reported a whitespace-only TODO line, corrected in subsequent bookkeeping. No tests or builds were run.
+- G1Strategy and BoundaryReview found that the approved split puts keyboard activation in G1 but its real navigation action in G3; a G1-only implementation would leave an inert button or test-only callback. RegroupPlan proposes one coherent remaining commit group, with bounded items below and unchanged SPEC criteria. No runtime checks were run.
+- User explicitly approved the combined G1 grouping without changing SPEC requirements or publication restrictions.
+- IntegratedStrategy mapped DIAG-AC-01–14 to focused lifecycle, rendering, settings-result, navigation, and cross-boundary tests. Actual scroll containment and trusted keyboard-to-navigation require rendered host verification; mocked DOM or direct callback invocation is not equivalent. Planned affected tests include diagnostics view, settings, and plugin lifecycle plus build. Strategy ran no tests or builds.
+- DiagnosticsOwner implemented the four G1 items and affected documentation. Initial checks failed for missing dependencies, a listener field, and fixture regressions; after installing locked plugin dependencies and owner corrections, focused diagnostics/settings/lifecycle tests passed 39/39 and build passed.
+- DiagnosticsReview found fixed-height/nowrap button overflow, inactive new tabs, and line navigation in hidden source editors when defaulting to Reading view. Owner corrected these and added mock/structural checks; focused tests passed 40/40 and build passed. CorrectedReview found the source fixes present but blocked acceptance on real host evidence and a missing populated-to-clean transition test.
+- Owner added a settings-to-plugin-to-view populated-to-clean assertion; focused lifecycle tests passed 2/2. ReductionReview selected no reductions; PolishReview found no confirmed static UX defect but could not verify host focus styling.
+- User requested live verification in `/home/rok/offline/testVault`. Its `obsidian-sample-plugin` symlink was changed from `/home/rok/sync/obsidian-linter/obsidian-sample-plugin/` to `/home/rok/offline/tmp/obsidian-linter-diagnostics-sidebar/obsidian-sample-plugin`; HostVerification confirmed the live vault and both command entries. Host tests are ongoing using uniquely named fixture folder `__hostdiag_20261031_a81f` and rules file `__hostdiag_20261031_a81f-rules.json`.
+- HostVerification in Obsidian 1.14.5 on testVault observed wrapped long findings, contained sidebar scrolling, both commands with opposite-side reuse, visible keyboard focus, Enter/Space navigation, and the final finding reachable. Line/no-line targets opened; exact real-host cursor line and default Reading-mode navigation were not independently verified. PreviewHost attempted the latter without changing `app.json`; settings access was unsuccessful. Screenshots: `host-verification/` in the worktree (untracked evidence).
+- HostVerification created `testVault/__hostdiag_20261031_a81f/` (48 notes), `testVault/__hostdiag_20261031_a81f-rules.json`, and plugin `data.json` pointing to that rules file; the fixture heading was restored after accidental test keystrokes. Automatic indexing ran; prior database state was not captured. Fixtures were retained rather than deleted.
+- FinalGroupReview: **Accepted, no findings**, base `f452abc2ed3d07dff3f169dcb28220bc53f7b5ee`. Reviewed Git blobs: SPEC `a71608a07b84f128550388a0a90782474be93e87`, TODO `de91e526bc9f9c1ef0b2d5e9bb977d1f92ae2fa5`, view `be645ad58dec82193d08ffd6405ed79f0290d0d5`, main `b145485818025d99e4d35a438a716324302ef804`, settings `7403d5f134a4539b36ea4087da9b68113d285ce9`, CSS `8415798e293673ec3b52f74d4b208686745ba3ac`, view test `138df2040baa52ba87d64b81b7342ab7161f58f3`, lifecycle test `8254943cd87f841aeab43d18ce50e08095b64ea1`, settings test `65fd49c88de01ae6afbffbd6bdf8d7782109c1cc`, CHECKS `5a085888e18473f01077c1f81799a285389c4032`, README `8e906f5284b505e615c7cd53ad2d8b3e4a1d0d61`, TOC `ba4187a14a06106bc06027a82d704c98e157d424`, JSON guide `9c150f3273782703a7ca53354934d40dd1a8fd61`. Reviewer ran no tests/build or host interaction; exact cursor and Reading-default behavior remain mock-tested, not observed.
+- G1CommitGate committed `c0e97d858785cb88be90aafe016ead5c7a343fed`, parent `f452abc2ed3d07dff3f169dcb28220bc53f7b5ee`, with 12 reviewed G1 files; accepted blobs matched, staged diff check passed, and host evidence was left uncommitted. No tests or builds were run by the gate.
+- User requested a pause; the in-flight IntegrationReview was cancelled before a verdict. Next on resumption: invoke integration-review on `c0e97d858785cb88be90aafe016ead5c7a343fed`, preserving pending bookkeeping and untracked host screenshots. Do not publish without separate approval.
+- On resumption, fetched `origin`; `origin/main` remained `b58d0f9c0e4d8a663239db3a41b1c3473964764e`, feature HEAD remained `c0e97d858785cb88be90aafe016ead5c7a343fed`, and the testVault plugin symlink still pointed to the feature worktree.
+- IntegrationResume: **Accepted, no findings**, for feature revision `c0e97d858785cb88be90aafe016ead5c7a343fed` against `b58d0f9c0e4d8a663239db3a41b1c3473964764e`. Independently inspected the complete diff, cross-boundary dispatch, tests, docs, screenshots, and pending TODO bookkeeping; the latter was limited to status/evidence and unchanged-text checklist markers. Reviewer ran no tests, builds, or host interactions. Exact real-host cursor position and Reading-default line navigation remained mock-tested, not host-observed.
+- PreviewResume temporarily switched testVault's default view for new tabs from Editing to Reading and confirmed a fixture opened in Reading view, but the diagnostics pane was empty, so diagnostic-driven navigation and exact cursor position could not be verified. Restored the original Editing default; no note content was edited. Additional screenshots are in `host-verification/`.
+- Next: obtain explicit publication authorization for `feature/diagnostics-sidebar` in `RokPre/obsidian-linter`, then invoke publish-pr. Do not merge or enable auto-merge.
+- User approved publication of the diagnostics PR subject to first correcting the unreadable settings layout shown in their screenshot. Preserve the existing publication target and do not merge.
+- SettingsLayoutScout found that the ignore-list card, Indexing, and Rules JSON settings are direct children of the settings content container; the screenshot shows them squeezed side-by-side. Correct the layout at the plugin-specific container, not the internal `.setting-item` row layout.
+- G2 LayoutStrategy: verify the two settings renderer paths, plugin-scoped wrapper, settings regression suite, and real Obsidian layout rather than inferring visual behavior from mocks.
+- LayoutOwner grouped the three sections in a shared plugin-owned wrapper with column flex styling and added a structural test for both renderer paths. Settings tests passed 36/36; `npm run build` passed.
+- LayoutHost observed the corrected sections stacked and readable in Obsidian 1.14.5 at 955×1200, with the picker and action controls visible; computed wrapper style was `display:flex; flex-direction:column`. Screenshot: `host-verification/g2-host-final.png`. Another plugin's settings showed no apparent impact, without a before/after comparison; controls were not clicked.
+- LayoutReview: **Accepted, no findings**, base `c0e97d858785cb88be90aafe016ead5c7a343fed`; reviewed Git blobs settings `99feecb3f317c0f4996fa225fa572f5d22c30860`, CSS `5bd68212b29e300915edecf0ffa9459296a1c0c4`, test `fa614c63b0db477129ab05cf49bf6a8a56556370`, SPEC `a71608a07b84f128550388a0a90782474be93e87`, TODO `ed9861f495742c33d6520d75c62ce33904b1847b`. Reviewer inspected rendered screenshot and docs but did not run tests/build or host interactions. Separate host verification of both renderer paths and all plugins/themes was not established.
+- G2 dedicated reduction skipped: one wrapper and one scoped CSS rule are the narrow layout correction. Dedicated polish skipped: the independent review included the rendered screenshot and visual consistency, with no remaining finding. Documentation needs no change for the presentation-only correction.
+- G2CommitGate committed `29877a8cf5879e1e6f349eef4f46c84d46ad1c79` on `feature/diagnostics-sidebar`, parent `c0e97d858785cb88be90aafe016ead5c7a343fed`, containing the accepted settings source, CSS, test, and TODO. Reviewed blobs matched; screenshots remained uncommitted. The gate ran no tests or builds.
+- IntegrationG2: **Accepted, no findings**, for complete feature revision `29877a8cf5879e1e6f349eef4f46c84d46ad1c79` against `b58d0f9c0e4d8a663239db3a41b1c3473964764e`. Independently inspected all group commits, SPEC, settings-to-sidebar dispatch, tests, docs, pending bookkeeping, and host screenshots; no tests/build/host interactions were performed by the reviewer. Existing host cursor/Reading-default and G2 control-interaction limitations remain as recorded above.
+- PublishDiagnostics published and verified PR #11 from `feature/diagnostics-sidebar` to `main`, head `29877a8cf5879e1e6f349eef4f46c84d46ad1c79`, base `b58d0f9c0e4d8a663239db3a41b1c3473964764e`. GitHub reported three CI jobs in progress and three queued at publication; no result is claimed. No merge or auto-merge occurred. Pending TODO bookkeeping and untracked host screenshots remain local.
+- BacklogCommitGate committed the TODO-only completion as `6a2c6fb782e51e5367f5800c8e33f68477f939be`; this commit has not been pushed. BacklogIntegration reviewed it and preserved the earlier evidence, but blocked integration acceptance: PR CI reports that `Workspace.revealLeaf` requires Obsidian 1.7.2 while the manifest declares minimum 1.6.6. Next: resolve the compatibility issue within authorized scope, rerun affected gates, then update the PR.
+- User requested marking the merged move tasks and any other verified completed backlog items done, then updating the PR. The move hierarchy was verified against merged PR #10 and its implementation/test evidence; other completed items were checked against current tests.
+- CompatibilityStrategy: preserve minimum Obsidian 1.6.6 by expanding the actual ancestor sidebar dock and activating its leaf using APIs available at that minimum; keep opposite-side reuse in place. Test both sides, collapsed and expanded docks, reuse, activation, and run lint/build. Native 1.6.6 host behavior remains to be verified separately.
+- BacklogFinalAudit confirmed the merged PR #10 move hierarchy, ignored-link investigation, and five completed settings-test children against source and test assertions; remaining partial tasks stay open. Added the ignored-link conclusion to its detail section. No tests/build were run by the reviewer.
+- CompatibilityOwner replaced the unsupported calls with actual-dock expansion and activation. Initial lifecycle tests passed 2/2 but build and lint failed because dock narrowing was missing; after correcting the type narrowing, lifecycle tests passed 2/2, `npm run lint` passed, and `npm run build` passed.
+- CompatibilityReview found no source/test blockers, reviewing `main.ts` blob `e6fdfe535387af7b10e95fd769b9ed30c742a221` and lifecycle-test blob `e42124f5a5bd584202013d46b1384b806f690195`. It checked Obsidian 1.6.6 declarations; native 1.6.6 runtime behavior remains unverified.
+- CompatibilityHost exercised both commands and collapsed sidebars in Obsidian 1.14.5: each expanded the correct dock, opposite-side invocation reused the same leaf in place, and no captured runtime errors occurred. Evidence: `host-verification/compatibility-host-check.txt`. No notes or settings were edited. Native 1.6.6 was not tested.
+- G3 dedicated reduction skipped: the correction is a focused existing-dock lookup and activation. Dedicated polish skipped: real-host command behavior was observed, with no visual change requiring further polish. No documentation change was needed for unchanged user-facing behavior.
+
+### Proposed commit groups
+
+G0 is committed. The revised G1 grouping below is approved and unimplemented. It requires a test strategy, focused verification, independent review, documentation check, and commit gate; invoke or explicitly skip dedicated reduction and polish.
+
+- [x] **G0 — Preserve inherited specification:** Review the approved relocation to `docs/inode-move-spec.md` and its backlog reference. Check navigation and affected documentation; verify exact-case links and preservation of the original contents. No DIAG criteria.
+- [x] **G1 — Complete diagnostics sidebar:** One coherent commit group containing the four bounded items below. Together they cover DIAG-AC-01–14, including real settings-to-view handoff, keyboard activation and navigation; no stub callbacks or placeholders. Update affected documentation and `docs/TOC.md` if inaccurate.
+  - [x] **diag_view** (no dependency; AC-01–03, 13): Reuse the existing diagnostic input, register the view and both commands, reveal an existing view in place, and release view-owned resources on close. Covers `define_the_view`, `register_a_dedicated`, `add_a_command`, `add_a_command_2`, `reuse_an_existing`, `clear_view_owned`, and `verify_both_sidebar`. Verify registration, both commands, same/opposite-side reuse, and close/reopen.
+  - [x] **diag_render** (depends on `diag_view`; AC-04–05, 08–09): Render fields and optional line, an empty state, a vertically scrollable results region and keyboard-accessible buttons. Covers `add_a_vertically`, `render_each_finding`, `display_the_line`, `show_an_empty`, `make_finding_entries`, and `verify_a_long`. Verify rendering, actual scroll containment, focus and keyboard activation.
+  - [x] **diag_outcome** (depends on `diag_view`; AC-06–07, 14): Connect Run checks to retained outcome state and the view. Replace findings on clean or partial completion, retain outcomes when closed without opening the view, and show an explicit failure state on a whole-run error while preserving existing error reporting. Covers `replace_the_previous`. Verify transitions while open and closed.
+  - [x] **diag_navigation** (depends on `diag_view` and `diag_render`; AC-10–12): Connect buttons to real file navigation, preserve the sidebar, convert and scroll supplied lines, open without forced cursor when no line is supplied, and show a notice for missing files. Covers `resolve_the_clicked`, `open_that_file`, `convert_a_supplied`, `place_the_editor`, `open_findings_without`, `show_a_notice`, `verify_clicking_a`, `verify_clicking_a_2`, and `verify_clicking_a_3`. Verify both navigation forms, keyboard-to-navigation, and missing-file handling.
+
+- [x] **G2 — Fix settings section layout:** Stack the plugin's ignore-list, Indexing, and Rules JSON sections vertically so descriptions and controls remain readable at the screenshot's window size, without changing their behavior or other plugins' settings. Verify the actual Obsidian rendering and relevant settings tests; independently review and commit the correction, then repeat feature-level integration review.
+
+- [ ] **G3 — Restore supported sidebar reveal:** Replace `Workspace.revealLeaf` calls, which CI reports require Obsidian 1.7.2, with 1.6.6-compatible dock expansion and activation while preserving both commands and in-place reuse. Add focused lifecycle regressions for both sides and collapsed docks; run focused tests, lint, build, and independent review before updating PR #11.
+
+## define_the_view
+
+## register_a_dedicated
+
+## add_a_command
+
+## add_a_command_2
+
+## reuse_an_existing
+
+## add_a_vertically
+
+## render_each_finding
+
+## display_the_line
+
+## show_an_empty
+
+## replace_the_previous
+
+## make_finding_entries
+
+## resolve_the_clicked
+
+## open_that_file
+
+## convert_a_supplied
+
+## place_the_editor
+
+## open_findings_without
+
+## show_a_notice
+
+## clear_view_owned
+
+## verify_both_sidebar
+
+## verify_a_long
+
+## verify_clicking_a
+
+## verify_clicking_a_2
+
+## verify_clicking_a_3
 
 ## detect_moves_where
 
@@ -30,7 +218,7 @@ Inode-based move reconciliation in the TypeScript plugin was merged in PR #10. T
 
 ### Workflow status
 
-**In progress.** RaceGroupReview accepted G2–G4; next: authorized combined commit-gate. Integration review and publication remain outstanding.
+**Complete — merged in PR #10.** The workflow status and evidence below are historical; their in-progress markers and publication-gating notes describe the state at the time, not the current status.
 
 ### Workflow evidence
 
@@ -113,38 +301,6 @@ No blocking product or architecture decision remains in the current specificatio
 
 Review the carried worktree navigation changes in `README.md` and `docs/TOC.md`, preserving their recorded content and hashes unless a specific inconsistency is found and approved. Keep both artifacts together in the setup commit. Verify the README's project-documentation navigation and the TOC's links against the worktree files; do not modify the original checkout.
 
-## decide_where_to
-
-## inspect_obsidian_plugin
-
-## unify_yaml_delimiters
-
-## modified_files_have
-
-## test_the_sql
-
-## run_indexing_independently
-
-## add_automated_worker
-
-## add_settings_button
-
-- Children: extend_the_fake & test_add_append & test_clear_replace & test_save_styling & test_save_validation & test_successful_save & test_failed_persistence
-
-## extend_the_fake
-
-## test_add_append
-
-## test_clear_replace
-
-## test_save_styling
-
-## test_save_validation
-
-## test_successful_save
-
-## test_failed_persistence
-
 ## move_device
 
 - Commit group: G1
@@ -188,151 +344,7 @@ Immediately before database reconciliation, non-followingly stat the destination
 
 Integrate reconciliation in the normal plugin indexing flow for file and directory moves. Reconcile eligible files into valid destination directories before stale-directory cleanup can cascade-delete them. Cover directory moves, a subsequent scan with no further work, and foreign-key/derived-data consistency for successful moves and fallback. Ensure focused coverage collectively satisfies MOVE-AC-11 across fresh/migrated schemas, matching, races, preservation, links, moves, subsequent scans, and consistency, including MOVE-AC-13's non-following skip and stale-path removal for a non-regular replacement and normal delete/reindex for a regular replacement. For MOVE-AC-14, detect unsupported no-follow safe reads during preflight, before any batch commit or destructive/incomplete state; abort/defer without losing the old indexed row or parsed records, and assert the candidate is not followed-read or silently omitted. Update affected documentation and `docs/TOC.md` in this group only if existing content no longer matches. Verify via focused plugin schema/indexer integration tests.
 
-# DONEs
+## inspect_obsidian_plugin
 
-- [x] DONE: Enable Save only when the ignore-list draft is valid and has unsaved changes; disable it when unchanged, invalid, or successfully saved. Ignore blank pickers when comparing with saved settings. [enable_save_only](#enable_save_only)
-- [x] DONE: Disable Clear when only one blank picker is present; enable it when there are paths or extra rows to clear. [disable_clear_when](#disable_clear_when)
-
-- [x] DONE: Add a diagnostics sidebar for linter findings. [add_a_diagnostics](#add_a_diagnostics)
-  - [x] DONE: Define the view input: rule ID, check, severity, vault-relative file path, message, and optional one-based line. [define_the_view](#define_the_view)
-  - [x] DONE: Register a dedicated Obsidian diagnostics view type. [register_a_dedicated](#register_a_dedicated)
-  - [x] DONE: Add a command to open the diagnostics view in the right sidebar. [add_a_command](#add_a_command)
-  - [x] DONE: Add a command to open the diagnostics view in the left sidebar. [add_a_command_2](#add_a_command_2)
-  - [x] DONE: Reuse an existing diagnostics view when either command is run again. [reuse_an_existing](#reuse_an_existing)
-  - [x] DONE: Add a vertically scrollable results container. [add_a_vertically](#add_a_vertically)
-  - [x] DONE: Render each finding with its rule ID, severity, file path, and message. [render_each_finding](#render_each_finding)
-  - [x] DONE: Display the line number when a finding provides one. [display_the_line](#display_the_line)
-  - [x] DONE: Show an empty-results message when there are no findings. [show_an_empty](#show_an_empty)
-  - [x] DONE: Replace the previous findings when a new health-check result arrives. [replace_the_previous](#replace_the_previous)
-  - [x] DONE: Make finding entries keyboard-accessible buttons. [make_finding_entries](#make_finding_entries)
-  - [x] DONE: Resolve the clicked finding's vault-relative path to an Obsidian file. [resolve_the_clicked](#resolve_the_clicked)
-  - [x] DONE: Open that file in an editor without replacing the diagnostics sidebar. [open_that_file](#open_that_file)
-  - [x] DONE: Convert a supplied one-based line to the editor's zero-based line. [convert_a_supplied](#convert_a_supplied)
-  - [x] DONE: Place the editor cursor on that line and scroll it into view. [place_the_editor](#place_the_editor)
-  - [x] DONE: Open findings without a line normally, without forcing a cursor position. [open_findings_without](#open_findings_without)
-  - [x] DONE: Show a notice instead of throwing if the file no longer exists. [show_a_notice](#show_a_notice)
-  - [x] DONE: Clear view-owned listeners and references when the view closes. [clear_view_owned](#clear_view_owned)
-  - [x] DONE: Verify both sidebar commands open or reuse the diagnostics view. [verify_both_sidebar](#verify_both_sidebar)
-  - [x] DONE: Verify a long findings list scrolls inside the sidebar. [verify_a_long](#verify_a_long)
-  - [x] DONE: Verify clicking a finding with a line opens the correct file and line. [verify_clicking_a](#verify_clicking_a)
-  - [x] DONE: Verify clicking a finding without a line opens the correct file. [verify_clicking_a_2](#verify_clicking_a_2)
-  - [x] DONE: Verify clicking a finding for a deleted file shows the notice. [verify_clicking_a_3](#verify_clicking_a_3)
-## enable_save_only
-
-## disable_clear_when
-
-## add_a_diagnostics
-
-- Children: define_the_view & register_a_dedicated & add_a_command & add_a_command_2 & reuse_an_existing & add_a_vertically & render_each_finding & display_the_line & show_an_empty & replace_the_previous & make_finding_entries & resolve_the_clicked & open_that_file & convert_a_supplied & place_the_editor & open_findings_without & show_a_notice & clear_view_owned & verify_both_sidebar & verify_a_long & verify_clicking_a & verify_clicking_a_2 & verify_clicking_a_3
-
-### Workflow status
-
-**Published:** [PR #11](https://github.com/RokPre/obsidian-linter/pull/11) is open for the accepted feature revision. It has not been merged.
-
-### Workflow evidence
-
-- Selected backlog item: `add_a_diagnostics`, from `/home/rok/sync/obsidian-linter/TODO.md` at `b58d0f9c0e4d8a663239db3a41b1c3473964764e`; its child items above preserve the selected request.
-- Original checkout: `/home/rok/sync/obsidian-linter`; worktree: `/home/rok/offline/tmp/obsidian-linter-diagnostics-sidebar`; branch: `feature/diagnostics-sidebar`; remote: `origin`; base: `main`; starting commit: `b58d0f9c0e4d8a663239db3a41b1c3473964764e`.
-- `origin/main` was fetched and the original checkout aligned to it using the user-authorized hard reset. The remote already contained the local navigation additions; the original README's `Read/Validate` wording was replaced by the remote's `Read/validate`.
-- Initial read-only discovery found that the existing diagnostic payload already includes the requested fields and that the settings Run checks handler currently logs results. Discovery was performed before the remote update and must be refreshed against this worktree.
-- User approved moving the unrelated inode-move specification to `docs/inode-move-spec.md` and updating its backlog reference before creating the diagnostics root `SPEC.md`.
-- Requirements specialist found the existing diagnostic payload already has the required fields and identified two unanswered UI decisions: move versus reveal an existing view in the opposite sidebar, and automatically open versus retain results when no view is open. No diagnostics `SPEC.md` was created.
-- User decided that an existing view is revealed in place even when the other side is requested, and that arriving results do not open a closed view; the latest findings are retained.
-- Requirements specialist drafted [SPEC.md](SPEC.md) with DIAG-AC-01–13. Outstanding question: whether a whole-run failure retains prior findings or clears/shows a failed state. No implementation approval.
-- User decided a whole-run failure replaces findings with an explicit failure state; RequirementsFailure added DIAG-AC-14 to [SPEC.md](SPEC.md), retaining the existing error notice.
-- ArchitectureReview independently inspected the specification and current result flow; recommended reusing `RuleDiagnostic` and a narrow settings-to-plugin handoff, with retained outcome separate from view lifecycle. No substantive specification change selected; no tests or builds run.
-- DiagnosticsBreakdown proposed G0–G3 below. Its tracker edit was misdirected to the original checkout; that single unintended change was removed. The plan was integrated in this worktree by the orchestrator.
-- No diagnostics specification, plan, implementation, review, commit, or publication is approved or completed. Next: user review and approval of [SPEC.md](SPEC.md) and the plan below.
-- User approved the diagnostics specification and G0–G3 plan for implementation. This approval does not authorize commits or publication.
-- G0Strategy and G0Implementation verified the preserved inode spec SHA-256 `3ea05646d05d793c8f417e0b5c39f5882396f1dbc5b5125b23df73210de758a6` against the base spec, checked diagnostics spec identity, and checked 33 conventional local Markdown links in README, TOC, and TODO: no missing or case-mismatched links or unresolved fragments. The link checker is not a full Markdown parser; no rendered navigation or tests/build were run. Updated one historical strategy heading to identify the relocated spec. No TOC change selected.
-- G0 dedicated reduction skipped: direct relocation and two reference updates have no meaningful additional complexity. Dedicated polish skipped: G0 has no interactive UI; independent review included static navigation and consistency.
-- G0Review: Accepted, no findings, base `b58d0f9c0e4d8a663239db3a41b1c3473964764e`; reviewed Git blobs: preserved inode spec `c64f0e311cd8776f22ff17605fc4e22ac5617068`, diagnostics SPEC `a71608a07b84f128550388a0a90782474be93e87`, complete TODO `2b2863773ca2cb3fda761b9759e35a66d3a6bc7d`, README `29ed7e9b8988e3370bdaebf665f89104c837ccb9`, TOC `5dc5ddb6fd0495f9764d89de3184154c8325f3d8`. Static review confirmed relocated blob equals base SPEC; no tests, builds, rendered navigation, or interactive behavior were run by reviewer. This verdict covers G0 only.
-- Next: obtain explicit commit authorization, then invoke commit-gate for G0; do not start G1 before that gate passes.
-- User authorized proceeding with implementation and commits; explicitly withheld pull-request publication until separate approval.
-- G0CommitGate: committed `f452abc2ed3d07dff3f169dcb28220bc53f7b5ee` on `feature/diagnostics-sidebar`, parent `b58d0f9c0e4d8a663239db3a41b1c3473964764e`; includes `SPEC.md`, `TODO.md`, and `docs/inode-move-spec.md`. Accepted artifact blobs matched; `git diff --check` reported a whitespace-only TODO line, corrected in subsequent bookkeeping. No tests or builds were run.
-- G1Strategy and BoundaryReview found that the approved split puts keyboard activation in G1 but its real navigation action in G3; a G1-only implementation would leave an inert button or test-only callback. RegroupPlan proposes one coherent remaining commit group, with bounded items below and unchanged SPEC criteria. No runtime checks were run.
-- User explicitly approved the combined G1 grouping without changing SPEC requirements or publication restrictions.
-- IntegratedStrategy mapped DIAG-AC-01–14 to focused lifecycle, rendering, settings-result, navigation, and cross-boundary tests. Actual scroll containment and trusted keyboard-to-navigation require rendered host verification; mocked DOM or direct callback invocation is not equivalent. Planned affected tests include diagnostics view, settings, and plugin lifecycle plus build. Strategy ran no tests or builds.
-- DiagnosticsOwner implemented the four G1 items and affected documentation. Initial checks failed for missing dependencies, a listener field, and fixture regressions; after installing locked plugin dependencies and owner corrections, focused diagnostics/settings/lifecycle tests passed 39/39 and build passed.
-- DiagnosticsReview found fixed-height/nowrap button overflow, inactive new tabs, and line navigation in hidden source editors when defaulting to Reading view. Owner corrected these and added mock/structural checks; focused tests passed 40/40 and build passed. CorrectedReview found the source fixes present but blocked acceptance on real host evidence and a missing populated-to-clean transition test.
-- Owner added a settings-to-plugin-to-view populated-to-clean assertion; focused lifecycle tests passed 2/2. ReductionReview selected no reductions; PolishReview found no confirmed static UX defect but could not verify host focus styling.
-- User requested live verification in `/home/rok/offline/testVault`. Its `obsidian-sample-plugin` symlink was changed from `/home/rok/sync/obsidian-linter/obsidian-sample-plugin/` to `/home/rok/offline/tmp/obsidian-linter-diagnostics-sidebar/obsidian-sample-plugin`; HostVerification confirmed the live vault and both command entries. Host tests are ongoing using uniquely named fixture folder `__hostdiag_20261031_a81f` and rules file `__hostdiag_20261031_a81f-rules.json`.
-- HostVerification in Obsidian 1.14.5 on testVault observed wrapped long findings, contained sidebar scrolling, both commands with opposite-side reuse, visible keyboard focus, Enter/Space navigation, and the final finding reachable. Line/no-line targets opened; exact real-host cursor line and default Reading-mode navigation were not independently verified. PreviewHost attempted the latter without changing `app.json`; settings access was unsuccessful. Screenshots: `host-verification/` in the worktree (untracked evidence).
-- HostVerification created `testVault/__hostdiag_20261031_a81f/` (48 notes), `testVault/__hostdiag_20261031_a81f-rules.json`, and plugin `data.json` pointing to that rules file; the fixture heading was restored after accidental test keystrokes. Automatic indexing ran; prior database state was not captured. Fixtures were retained rather than deleted.
-- FinalGroupReview: **Accepted, no findings**, base `f452abc2ed3d07dff3f169dcb28220bc53f7b5ee`. Reviewed Git blobs: SPEC `a71608a07b84f128550388a0a90782474be93e87`, TODO `de91e526bc9f9c1ef0b2d5e9bb977d1f92ae2fa5`, view `be645ad58dec82193d08ffd6405ed79f0290d0d5`, main `b145485818025d99e4d35a438a716324302ef804`, settings `7403d5f134a4539b36ea4087da9b68113d285ce9`, CSS `8415798e293673ec3b52f74d4b208686745ba3ac`, view test `138df2040baa52ba87d64b81b7342ab7161f58f3`, lifecycle test `8254943cd87f841aeab43d18ce50e08095b64ea1`, settings test `65fd49c88de01ae6afbffbd6bdf8d7782109c1cc`, CHECKS `5a085888e18473f01077c1f81799a285389c4032`, README `8e906f5284b505e615c7cd53ad2d8b3e4a1d0d61`, TOC `ba4187a14a06106bc06027a82d704c98e157d424`, JSON guide `9c150f3273782703a7ca53354934d40dd1a8fd61`. Reviewer ran no tests/build or host interaction; exact cursor and Reading-default behavior remain mock-tested, not observed.
-- G1CommitGate committed `c0e97d858785cb88be90aafe016ead5c7a343fed`, parent `f452abc2ed3d07dff3f169dcb28220bc53f7b5ee`, with 12 reviewed G1 files; accepted blobs matched, staged diff check passed, and host evidence was left uncommitted. No tests or builds were run by the gate.
-- User requested a pause; the in-flight IntegrationReview was cancelled before a verdict. Next on resumption: invoke integration-review on `c0e97d858785cb88be90aafe016ead5c7a343fed`, preserving pending bookkeeping and untracked host screenshots. Do not publish without separate approval.
-- On resumption, fetched `origin`; `origin/main` remained `b58d0f9c0e4d8a663239db3a41b1c3473964764e`, feature HEAD remained `c0e97d858785cb88be90aafe016ead5c7a343fed`, and the testVault plugin symlink still pointed to the feature worktree.
-- IntegrationResume: **Accepted, no findings**, for feature revision `c0e97d858785cb88be90aafe016ead5c7a343fed` against `b58d0f9c0e4d8a663239db3a41b1c3473964764e`. Independently inspected the complete diff, cross-boundary dispatch, tests, docs, screenshots, and pending TODO bookkeeping; the latter was limited to status/evidence and unchanged-text checklist markers. Reviewer ran no tests, builds, or host interactions. Exact real-host cursor position and Reading-default line navigation remained mock-tested, not host-observed.
-- PreviewResume temporarily switched testVault's default view for new tabs from Editing to Reading and confirmed a fixture opened in Reading view, but the diagnostics pane was empty, so diagnostic-driven navigation and exact cursor position could not be verified. Restored the original Editing default; no note content was edited. Additional screenshots are in `host-verification/`.
-- Next: obtain explicit publication authorization for `feature/diagnostics-sidebar` in `RokPre/obsidian-linter`, then invoke publish-pr. Do not merge or enable auto-merge.
-- User approved publication of the diagnostics PR subject to first correcting the unreadable settings layout shown in their screenshot. Preserve the existing publication target and do not merge.
-- SettingsLayoutScout found that the ignore-list card, Indexing, and Rules JSON settings are direct children of the settings content container; the screenshot shows them squeezed side-by-side. Correct the layout at the plugin-specific container, not the internal `.setting-item` row layout.
-- G2 LayoutStrategy: verify the two settings renderer paths, plugin-scoped wrapper, settings regression suite, and real Obsidian layout rather than inferring visual behavior from mocks.
-- LayoutOwner grouped the three sections in a shared plugin-owned wrapper with column flex styling and added a structural test for both renderer paths. Settings tests passed 36/36; `npm run build` passed.
-- LayoutHost observed the corrected sections stacked and readable in Obsidian 1.14.5 at 955×1200, with the picker and action controls visible; computed wrapper style was `display:flex; flex-direction:column`. Screenshot: `host-verification/g2-host-final.png`. Another plugin's settings showed no apparent impact, without a before/after comparison; controls were not clicked.
-- LayoutReview: **Accepted, no findings**, base `c0e97d858785cb88be90aafe016ead5c7a343fed`; reviewed Git blobs settings `99feecb3f317c0f4996fa225fa572f5d22c30860`, CSS `5bd68212b29e300915edecf0ffa9459296a1c0c4`, test `fa614c63b0db477129ab05cf49bf6a8a56556370`, SPEC `a71608a07b84f128550388a0a90782474be93e87`, TODO `ed9861f495742c33d6520d75c62ce33904b1847b`. Reviewer inspected rendered screenshot and docs but did not run tests/build or host interactions. Separate host verification of both renderer paths and all plugins/themes was not established.
-- G2 dedicated reduction skipped: one wrapper and one scoped CSS rule are the narrow layout correction. Dedicated polish skipped: the independent review included the rendered screenshot and visual consistency, with no remaining finding. Documentation needs no change for the presentation-only correction.
-- G2CommitGate committed `29877a8a` on `feature/diagnostics-sidebar`, parent `c0e97d858785cb88be90aafe016ead5c7a343fed`, containing the accepted settings source, CSS, test, and TODO. Reviewed blobs matched; screenshots remained uncommitted. The gate ran no tests or builds.
-- IntegrationG2: **Accepted, no findings**, for complete feature revision `29877a8cf5879e1e6f349eef4f46c84d46ad1c79` against `b58d0f9c0e4d8a663239db3a41b1c3473964764e`. Independently inspected all group commits, SPEC, settings-to-sidebar dispatch, tests, docs, pending bookkeeping, and host screenshots; no tests/build/host interactions were performed by the reviewer. Existing host cursor/Reading-default and G2 control-interaction limitations remain as recorded above.
-- PublishDiagnostics published and verified PR #11 from `feature/diagnostics-sidebar` to `main`, head `29877a8cf5879e1e6f349eef4f46c84d46ad1c79`, base `b58d0f9c0e4d8a663239db3a41b1c3473964764e`. GitHub reported three CI jobs in progress and three queued at publication; no result is claimed. No merge or auto-merge occurred. Pending TODO bookkeeping and untracked host screenshots remain local.
-
-### Proposed commit groups
-
-G0 is committed. The revised G1 grouping below is approved and unimplemented. It requires a test strategy, focused verification, independent review, documentation check, and commit gate; invoke or explicitly skip dedicated reduction and polish.
-
-- [x] **G0 — Preserve inherited specification:** Review the approved relocation to `docs/inode-move-spec.md` and its backlog reference. Check navigation and affected documentation; verify exact-case links and preservation of the original contents. No DIAG criteria.
-- [x] **G1 — Complete diagnostics sidebar:** One coherent commit group containing the four bounded items below. Together they cover DIAG-AC-01–14, including real settings-to-view handoff, keyboard activation and navigation; no stub callbacks or placeholders. Update affected documentation and `docs/TOC.md` if inaccurate.
-  - [x] **diag_view** (no dependency; AC-01–03, 13): Reuse the existing diagnostic input, register the view and both commands, reveal an existing view in place, and release view-owned resources on close. Covers `define_the_view`, `register_a_dedicated`, `add_a_command`, `add_a_command_2`, `reuse_an_existing`, `clear_view_owned`, and `verify_both_sidebar`. Verify registration, both commands, same/opposite-side reuse, and close/reopen.
-  - [x] **diag_render** (depends on `diag_view`; AC-04–05, 08–09): Render fields and optional line, an empty state, a vertically scrollable results region and keyboard-accessible buttons. Covers `add_a_vertically`, `render_each_finding`, `display_the_line`, `show_an_empty`, `make_finding_entries`, and `verify_a_long`. Verify rendering, actual scroll containment, focus and keyboard activation.
-  - [x] **diag_outcome** (depends on `diag_view`; AC-06–07, 14): Connect Run checks to retained outcome state and the view. Replace findings on clean or partial completion, retain outcomes when closed without opening the view, and show an explicit failure state on a whole-run error while preserving existing error reporting. Covers `replace_the_previous`. Verify transitions while open and closed.
-  - [x] **diag_navigation** (depends on `diag_view` and `diag_render`; AC-10–12): Connect buttons to real file navigation, preserve the sidebar, convert and scroll supplied lines, open without forced cursor when no line is supplied, and show a notice for missing files. Covers `resolve_the_clicked`, `open_that_file`, `convert_a_supplied`, `place_the_editor`, `open_findings_without`, `show_a_notice`, `verify_clicking_a`, `verify_clicking_a_2`, and `verify_clicking_a_3`. Verify both navigation forms, keyboard-to-navigation, and missing-file handling.
-
-- [x] **G2 — Fix settings section layout:** Stack the plugin's ignore-list, Indexing, and Rules JSON sections vertically so descriptions and controls remain readable at the screenshot's window size, without changing their behavior or other plugins' settings. Verify the actual Obsidian rendering and relevant settings tests; independently review and commit the correction, then repeat feature-level integration review.
-
-## define_the_view
-
-## register_a_dedicated
-
-## add_a_command
-
-## add_a_command_2
-
-## reuse_an_existing
-
-## add_a_vertically
-
-## render_each_finding
-
-## display_the_line
-
-## show_an_empty
-
-## replace_the_previous
-
-## make_finding_entries
-
-## resolve_the_clicked
-
-## open_that_file
-
-## convert_a_supplied
-
-## place_the_editor
-
-## open_findings_without
-
-## show_a_notice
-
-## clear_view_owned
-
-## verify_both_sidebar
-
-## verify_a_long
-
-## verify_clicking_a
-
-## verify_clicking_a_2
-
-## verify_clicking_a_3
+Existing ignored targets resolve as `ignored`, not `missing`; changing exclusions re-resolves affected links as targets are ignored or indexed again. Indexer tests cover these transitions without reading ignored content; this was not independently verified in live Obsidian.
 

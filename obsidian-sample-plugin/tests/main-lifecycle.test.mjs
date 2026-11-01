@@ -146,6 +146,22 @@ class Worker {
 
 const registeredViews = new Map();
 const revealedLeaves = [];
+const expandedDocks = [];
+const activeLeaves = [];
+class WorkspaceSidedock {
+	constructor(side) {
+		this.side = side;
+		this.collapsed = true;
+	}
+	expand() {
+		this.collapsed = false;
+		expandedDocks.push(this);
+	}
+}
+const sideDocks = {
+	left: new WorkspaceSidedock('left'),
+	right: new WorkspaceSidedock('right'),
+};
 let createdLeaf;
 const cursorPositions = [];
 const scrollRequests = [];
@@ -155,6 +171,7 @@ let editorLeaf;
 function makeLeaf(side) {
 	return {
 		side,
+		parent: { parent: { parent: sideDocks[side] } },
 		async setViewState(state) {
 			this.viewType = state.type;
 			this.state = state;
@@ -206,14 +223,17 @@ const app = {
 	},
 	metadataCache: { getFirstLinkpathDest: () => null },
 	workspace: {
+		leftSplit: sideDocks.left,
+		rightSplit: sideDocks.right,
 		onLayoutReady(callback) { layoutReady = callback; },
 		getLeavesOfType(type) { return createdLeaf?.viewType === type ? [createdLeaf] : []; },
 		getRightLeaf(create) { assert.equal(create, false); return makeLeaf('right'); },
 		getLeftLeaf(create) { assert.equal(create, false); return makeLeaf('left'); },
-		async revealLeaf(leaf) { revealedLeaves.push(leaf); },
+		revealLeaf(leaf) { revealedLeaves.push(leaf); },
 		setActiveLeaf(leaf, params) {
 			assert.equal(params.focus, true);
 			leaf.active = true;
+			activeLeaves.push(leaf);
 			activeEditorLeaves.push(leaf);
 		},
 		getLeaf(type) {
@@ -247,7 +267,7 @@ const context = {
 	console: { ...console, error(...args) { errors.push(args.map(String)); } },
 	require(name) { if (name === 'obsidian') return obsidian; throw new Error(`Unexpected require: ${name}`); },
 };
-const obsidian = { FileSystemAdapter, AbstractInputSuggest, PluginSettingTab, Setting, Notice, Plugin, Modal, TFile, ItemView, MarkdownView };
+const obsidian = { FileSystemAdapter, AbstractInputSuggest, PluginSettingTab, Setting, Notice, Plugin, Modal, TFile, ItemView, MarkdownView, WorkspaceSidedock };
 vm.runInNewContext(compiled.outputFiles[0].text, context, { filename: 'main-lifecycle.bundle.cjs' });
 const ObsidianLinterPlugin = module.exports.default;
 
@@ -270,11 +290,26 @@ await test('real plugin lifecycle is manual-only outside explicit Read/validate'
 	const diagnosticsLeaf = createdLeaf;
 	assert.equal(diagnosticsLeaf.side, 'right');
 	assert.equal(diagnosticsLeaf.state.type, diagnosticsViewType);
+	assert.equal(sideDocks.right.collapsed, false, 'opening on the right expands the right dock');
+	assert.deepEqual(expandedDocks, [sideDocks.right]);
+	assert.equal(activeLeaves.at(-1), diagnosticsLeaf, 'opening activates the new diagnostics leaf');
 	await diagnosticsCommands[0].callback();
 	assert.equal(createdLeaf, diagnosticsLeaf, 'repeating the same-side command reuses the existing view');
 	await diagnosticsCommands[1].callback();
-	assert.equal(createdLeaf, diagnosticsLeaf, 'opposite-side command reveals the existing view in place');
-	assert.deepEqual(revealedLeaves, [diagnosticsLeaf, diagnosticsLeaf, diagnosticsLeaf]);
+	assert.equal(createdLeaf, diagnosticsLeaf, 'opposite-side command reuses the existing view in place');
+	assert.deepEqual(expandedDocks, [sideDocks.right, sideDocks.right, sideDocks.right],
+		'opposite-side command expands the actual dock containing the existing leaf');
+	assert.deepEqual(activeLeaves, [diagnosticsLeaf, diagnosticsLeaf, diagnosticsLeaf],
+		'each command activates the existing diagnostics leaf');
+	assert.equal(sideDocks.left.collapsed, true, 'opposite-side command does not expand the requested, incorrect dock');
+	assert.deepEqual(revealedLeaves, [], 'diagnostics opening does not use revealLeaf');
+	const originalParent = diagnosticsLeaf.parent;
+	diagnosticsLeaf.parent = { parent: null };
+	const dockExpansionCount = expandedDocks.length;
+	await diagnosticsCommands[1].callback();
+	assert.equal(expandedDocks.length, dockExpansionCount, 'root-level existing view does not expand either sidebar');
+	assert.equal(activeLeaves.at(-1), diagnosticsLeaf, 'root-level existing view is still activated');
+	diagnosticsLeaf.parent = originalParent;
 	const completedFindings = [{
 		ruleId: 'new-result', check: 'filenameCase', severity: 'warning', path: 'note.md', message: 'New finding',
 	}];
@@ -288,14 +323,19 @@ await test('real plugin lifecycle is manual-only outside explicit Read/validate'
 		...completedFindings[0], message: 'Closed-view result',
 	}] });
 	assert.equal(revealedLeaves.length, revealCount, 'new outcomes do not open a closed view');
-	await diagnosticsCommands[0].callback();
+	await diagnosticsCommands[1].callback();
 	const reopenedLeaf = createdLeaf;
+	assert.equal(reopenedLeaf.side, 'left');
+	assert.equal(sideDocks.left.collapsed, false, 'opening on the left expands the left dock');
+	assert.equal(expandedDocks.at(-1), sideDocks.left);
+	assert.equal(activeLeaves.at(-1), reopenedLeaf, 'opening activates the new left diagnostics leaf');
 	assert.match(renderedText(reopenedLeaf.view.contentEl), /Closed-view result/);
 	await reopenedLeaf.view.onClose();
 	reopenedLeaf.viewType = undefined;
 	plugin.setDiagnosticsOutcome({ status: 'failed', message: 'worker failed' });
-	assert.equal(revealedLeaves.length, revealCount + 1, 'whole-run failure leaves a closed view closed');
+	assert.equal(revealedLeaves.length, revealCount, 'whole-run failure leaves a closed view closed');
 	await diagnosticsCommands[1].callback();
+	assert.equal(createdLeaf.side, 'left');
 	assert.match(renderedText(createdLeaf.view.contentEl), /Checks failed: worker failed/);
 	await plugin.openDiagnosticFinding({
 		ruleId: 'with-line', check: 'filenameCase', severity: 'warning', path: 'note.md', message: 'Review', line: 4,
