@@ -75,7 +75,8 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 		this.draftIgnoredPaths = [...this.plugin.settings.ignoredPaths];
 		containerEl.empty();
 
-		const ignoreListEl = containerEl.createDiv({ cls: 'vault-helper-ignore-list' });
+		const layoutEl = containerEl.createDiv({ cls: 'vault-helper-settings-layout' });
+		const ignoreListEl = layoutEl.createDiv({ cls: 'vault-helper-ignore-list' });
 		new Setting(ignoreListEl)
 			.setName('Blacklist for files and folders')
 			.setDesc('Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
@@ -230,7 +231,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 				updateSaveButton();
 			});
 
-		new Setting(containerEl)
+		new Setting(layoutEl)
 			.setName('Indexing')
 			.setDesc('Scan the vault and update its index using the saved ignore list.')
 			.addButton((button) =>
@@ -264,7 +265,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 				new Notice(`Settings could not be saved: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		};
-		new Setting(containerEl)
+		new Setting(layoutEl)
 			.setName('Rules JSON file')
 			.setDesc('Path to the JSON rules file relative to the vault root.')
 			.addText((text) => {

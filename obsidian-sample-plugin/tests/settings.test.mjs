@@ -64,10 +64,13 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 		close() {}
 	}
 	class Container {
-		constructor() { this.children = []; }
+		constructor(className = '') {
+			this.className = className;
+			this.children = [];
+		}
 		empty() { this.children.length = 0; }
-		createDiv() {
-			const child = new Container();
+		createDiv(options = {}) {
+			const child = new Container(options.cls);
 			this.children.push(child);
 			return child;
 		}
@@ -75,9 +78,10 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	class PluginSettingTab {
 		constructor(app) {
 			this.app = app;
-			this.containerEl = {
-				empty() { settings.length = 0; },
-				createDiv() { return new Container(); },
+			this.containerEl = new Container();
+			this.containerEl.empty = () => {
+				settings.length = 0;
+				this.containerEl.children.length = 0;
 			};
 		}
 	}
@@ -253,6 +257,26 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
 	};
 }
+test('both settings renderers place all three sections in one plugin layout container', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-layout-'));
+	try {
+		for (const renderMode of ['legacy', 'declarative']) {
+			const ui = await settingsTab(vault, [], renderMode);
+			const root = renderMode === 'legacy' ? ui.tab.containerEl : ui.renderRoot;
+			assert.equal(root.children.length, 1);
+			const [layout] = root.children;
+			assert.equal(layout.className, 'vault-helper-settings-layout');
+			assert.deepEqual(
+				layout.children.map(child => child.name ?? child.className),
+				['vault-helper-ignore-list', 'Indexing', 'Rules JSON file'],
+			);
+			assert.equal(layout.children[0].children[0].name, 'Blacklist for files and folders');
+		}
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
 test('declarative settings define a searchable ignored-path editor', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-declarative-'));
 	try {
