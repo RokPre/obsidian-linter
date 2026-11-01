@@ -6,7 +6,12 @@ import {
 	Modal,
 	Notice,
 	Plugin,
+	TFile,
+	WorkspaceLeaf,
+	WorkspaceSidedock,
 } from 'obsidian';
+import { DiagnosticsView, DIAGNOSTICS_VIEW_TYPE, type DiagnosticsOutcome } from './diagnostics-view';
+import type { RuleDiagnostic } from './rules-engine';
 import { IndexerClient } from './indexer-client';
 import { IndexerNotice } from './indexer-notice';
 import {
@@ -19,8 +24,26 @@ export default class ObsidianLinterPlugin extends Plugin {
 	settings!: ObsidianLinterSettings;
 	indexerClient!: IndexerClient;
 	private indexerNotice?: IndexerNotice;
+	private diagnosticsOutcome: DiagnosticsOutcome = { status: 'completed', diagnostics: [] };
 
 	async onload() {
+		this.registerView(DIAGNOSTICS_VIEW_TYPE, (leaf) => {
+			const view = new DiagnosticsView(leaf, (finding) => {
+				void this.openDiagnosticFinding(finding);
+			});
+			view.setOutcome(this.diagnosticsOutcome);
+			return view;
+		});
+		this.addCommand({
+			id: 'open-diagnostics-right',
+			name: 'Open diagnostics in right sidebar',
+			callback: () => this.openDiagnosticsView('right'),
+		});
+		this.addCommand({
+			id: 'open-diagnostics-left',
+			name: 'Open diagnostics in left sidebar',
+			callback: () => this.openDiagnosticsView('left'),
+		});
 		await this.loadSettings();
 		const adapter = this.app.vault.adapter;
 		if (adapter instanceof FileSystemAdapter) {
@@ -125,6 +148,71 @@ export default class ObsidianLinterPlugin extends Plugin {
 			new Notice('Click');
 		});
 
+	}
+
+	setDiagnosticsOutcome(outcome: DiagnosticsOutcome) {
+		this.diagnosticsOutcome = outcome;
+		const leaf = this.app.workspace.getLeavesOfType(DIAGNOSTICS_VIEW_TYPE)[0];
+		if (leaf?.view instanceof DiagnosticsView) leaf.view.setOutcome(outcome);
+	}
+
+	async openDiagnosticFinding(finding: RuleDiagnostic) {
+		const file = this.app.vault.getAbstractFileByPath(finding.path);
+		if (!(file instanceof TFile)) {
+			new Notice(`File not found: ${finding.path}`);
+			return;
+		}
+
+		try {
+			const leaf = this.app.workspace.getLeaf('tab');
+			await leaf.openFile(file);
+			this.app.workspace.setActiveLeaf(leaf, { focus: true });
+			if (finding.line === undefined || !(leaf.view instanceof MarkdownView)) return;
+
+			const viewState = leaf.getViewState();
+			if (leaf.view.getMode() !== 'source') {
+				await leaf.setViewState({
+					...viewState,
+					state: { ...viewState.state, mode: 'source' },
+				});
+			}
+			const line = finding.line - 1;
+			const position = { line, ch: 0 };
+			leaf.view.editor.setCursor(position);
+			leaf.view.editor.scrollIntoView({ from: position, to: position }, true);
+		} catch (error) {
+			console.error('Could not open diagnostic file', error);
+			new Notice(`Could not open ${finding.path}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private expandDiagnosticsDock(leaf: WorkspaceLeaf) {
+		const workspace = this.app.workspace;
+		let parent = leaf.parent;
+		while (parent) {
+			if (parent instanceof WorkspaceSidedock &&
+				(parent === workspace.leftSplit || parent === workspace.rightSplit)) {
+				parent.expand();
+				return;
+			}
+			parent = parent.parent;
+		}
+	}
+
+	private async openDiagnosticsView(side: 'left' | 'right') {
+		const workspace = this.app.workspace;
+		const existing = workspace.getLeavesOfType(DIAGNOSTICS_VIEW_TYPE)[0];
+		if (existing) {
+			this.expandDiagnosticsDock(existing);
+			workspace.setActiveLeaf(existing, { focus: true });
+			return;
+		}
+
+		const leaf = side === 'right' ? workspace.getRightLeaf(false) : workspace.getLeftLeaf(false);
+		if (!leaf) return;
+		await leaf.setViewState({ type: DIAGNOSTICS_VIEW_TYPE, active: true });
+		this.expandDiagnosticsDock(leaf);
+		workspace.setActiveLeaf(leaf, { focus: true });
 	}
 
 	onunload() {

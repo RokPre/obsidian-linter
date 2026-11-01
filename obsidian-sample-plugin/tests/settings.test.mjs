@@ -30,6 +30,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	const runChecksRequests = [];
 	const configRequests = [];
 	const saveRequests = [];
+	const diagnosticOutcomes = [];
 	const savedSettings = [];
 	const suggestions = [];
 	const vaultReads = [];
@@ -63,10 +64,13 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 		close() {}
 	}
 	class Container {
-		constructor() { this.children = []; }
+		constructor(className = '') {
+			this.className = className;
+			this.children = [];
+		}
 		empty() { this.children.length = 0; }
-		createDiv() {
-			const child = new Container();
+		createDiv(options = {}) {
+			const child = new Container(options.cls);
 			this.children.push(child);
 			return child;
 		}
@@ -74,9 +78,10 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	class PluginSettingTab {
 		constructor(app) {
 			this.app = app;
-			this.containerEl = {
-				empty() { settings.length = 0; },
-				createDiv() { return new Container(); },
+			this.containerEl = new Container();
+			this.containerEl.empty = () => {
+				settings.length = 0;
+				this.containerEl.children.length = 0;
 			};
 		}
 	}
@@ -205,6 +210,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 			savedSettings.push({ ...settings, ignoredPaths: [...settings.ignoredPaths] });
 			Object.assign(this.settings, settings);
 		},
+		setDiagnosticsOutcome(outcome) { diagnosticOutcomes.push(outcome); },
 		indexerClient: {
 			getIndexedFiles(vaultPath, configDir) {
 				indexedFileRequests.push([vaultPath, configDir]);
@@ -236,7 +242,7 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 	}
 	return {
 		settings, notices, errors, consoleLogs, allConsoleCalls, tab, plugin, buttons, indexRequests, runChecksRequests,
-		configRequests, saveRequests, savedSettings, suggestions, renderRoot, vaultReads, indexedFileRequests,
+		configRequests, saveRequests, savedSettings, suggestions, renderRoot, vaultReads, indexedFileRequests, diagnosticOutcomes,
 		parseRequests, matchRequests,
 		defaults: module.exports.DEFAULT_SETTINGS,
 		rulesSetting: settings.find(setting => setting.name === 'Rules JSON file'),
@@ -251,6 +257,26 @@ async function settingsTab(adapter, ignoredPaths = [], renderMode = 'legacy', ru
 		descriptions: settings.filter(setting => setting.description).map(setting => setting.description),
 	};
 }
+test('both settings renderers place all three sections in one plugin layout container', async () => {
+	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-layout-'));
+	try {
+		for (const renderMode of ['legacy', 'declarative']) {
+			const ui = await settingsTab(vault, [], renderMode);
+			const root = renderMode === 'legacy' ? ui.tab.containerEl : ui.renderRoot;
+			assert.equal(root.children.length, 1);
+			const [layout] = root.children;
+			assert.equal(layout.className, 'vault-helper-settings-layout');
+			assert.deepEqual(
+				layout.children.map(child => child.name ?? child.className),
+				['vault-helper-ignore-list', 'Indexing', 'Rules JSON file'],
+			);
+			assert.equal(layout.children[0].children[0].name, 'Blacklist for files and folders');
+		}
+	} finally {
+		await rm(vault, { recursive: true, force: true });
+	}
+});
+
 test('declarative settings define a searchable ignored-path editor', async () => {
 	const vault = await mkdtemp(join(tmpdir(), 'vault-helper-declarative-'));
 	try {
@@ -1095,6 +1121,7 @@ test('Run checks logs structured findings, separate failures, and distinct resul
 		assert.deepEqual(JSON.parse(JSON.stringify(ui.errors.filter(args => args[0] === 'Rule check failure').map(args => args[1]))), failures);
 		const summary = ui.consoleLogs.find(args => args[0] === 'Rule checks completed')?.[1];
 		assert.deepEqual(JSON.parse(JSON.stringify(summary)), { findings: 2, failures: 1, status: 'partial' });
+		assert.deepEqual(JSON.parse(JSON.stringify(ui.diagnosticOutcomes)), [{ status: 'completed', diagnostics }]);
 		assert.deepEqual(ui.indexRequests, []);
 	} finally {
 		await rm(vault, { recursive: true, force: true });
@@ -1155,6 +1182,9 @@ test('Run checks reports read, adapter, and run errors and always re-enables wit
 		assert.match(runError.notices[0], /index is not ready; select Index vault/i);
 		assert.equal(runError.consoleLogs.some(args => args[0] === 'Rule checks completed'), false);
 		assert.equal(runError.errors.length, 1);
+		assert.deepEqual(JSON.parse(JSON.stringify(runError.diagnosticOutcomes)), [{
+			status: 'failed', message: 'index is not ready; select Index vault',
+		}]);
 		assert.deepEqual(runError.indexRequests, []);
 
 		const readError = await settingsTab(vault, [], 'legacy', { rulesFilePath: 'rules.json' });

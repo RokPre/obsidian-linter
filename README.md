@@ -28,7 +28,7 @@ The index contains information about notes, directories, frontmatter, Markdown s
 
 The health checker supports version 1 rules from a JSON file. In plugin settings, configure a vault-relative path and choose **Read/validate** to validate the complete configuration and match rule scopes against indexed files, or choose **Run checks** to manually execute enabled rules and log findings.
 
-Runs require an existing persisted index whose derived data is ready; **Run checks** does not index the vault. Index-readiness or rule-execution failures are reported separately from findings. Results are logged to the console; the plugin does not open a findings window or sidebar.
+Runs require an existing persisted index whose derived data is ready; **Run checks** does not index the vault. Rule failures remain separate from findings. The latest findings or whole-run failure are retained in **Linter diagnostics**; open or reveal it with **Open diagnostics in right sidebar** or **Open diagnostics in left sidebar**. Results do not open the sidebar automatically. A whole-run failure replaces prior findings with a failure state and preserves the existing rules-file-path Notice.
 
 See the [JSON rules guide](docs/json-rules.md) for setup and workflow, [Linter checks and JSON rules](CHECKS.md) for the authoritative version 1 schema and check semantics, and [rules.example.json](rules.example.json) for a valid example.
 

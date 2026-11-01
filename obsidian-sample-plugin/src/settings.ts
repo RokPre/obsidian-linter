@@ -75,7 +75,8 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 		this.draftIgnoredPaths = [...this.plugin.settings.ignoredPaths];
 		containerEl.empty();
 
-		const ignoreListEl = containerEl.createDiv({ cls: 'vault-helper-ignore-list' });
+		const layoutEl = containerEl.createDiv({ cls: 'vault-helper-settings-layout' });
+		const ignoreListEl = layoutEl.createDiv({ cls: 'vault-helper-ignore-list' });
 		new Setting(ignoreListEl)
 			.setName('Blacklist for files and folders')
 			.setDesc('Exclude files or folders from indexing. Paths are relative to the vault root. Press save to apply changes.');
@@ -230,7 +231,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 				updateSaveButton();
 			});
 
-		new Setting(containerEl)
+		new Setting(layoutEl)
 			.setName('Indexing')
 			.setDesc('Scan the vault and update its index using the saved ignore list.')
 			.addButton((button) =>
@@ -264,7 +265,7 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 				new Notice(`Settings could not be saved: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		};
-		new Setting(containerEl)
+		new Setting(layoutEl)
 			.setName('Rules JSON file')
 			.setDesc('Path to the JSON rules file relative to the vault root.')
 			.addText((text) => {
@@ -338,13 +339,17 @@ export class ObsidianLinterSettingTab extends PluginSettingTab {
 							for (const failure of result.failures) {
 								console.error('Rule check failure', failure);
 							}
+							this.plugin.setDiagnosticsOutcome({ status: 'completed', diagnostics: result.diagnostics });
 							console.warn('Rule checks completed', {
 								findings: result.diagnostics.length,
 								failures: result.failures.length,
 								status: result.failures.length === 0 ? 'clean' : 'partial',
 							});
 						} catch (error) {
-							const message = error instanceof Error ? error.message : String(error);
+							const message = error !== null && typeof error === 'object' && 'message' in error
+								? String(error.message)
+								: String(error);
+							this.plugin.setDiagnosticsOutcome({ status: 'failed', message });
 							console.error('Rule checks failed', error);
 							new Notice(`${rulesFilePath}: ${message}`);
 						} finally {

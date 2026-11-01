@@ -1,11 +1,16 @@
 /*
 
 This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+available in the app when the plugin is enabled.
 
 If your plugin does not need CSS, delete this file.
 
 */
+
+.vault-helper-settings-layout {
+	display: flex;
+	flex-direction: column;
+}
 
 .vault-helper-ignore-list {
 	border: 1px solid var(--background-modifier-border);
@@ -29,4 +34,28 @@ If your plugin does not need CSS, delete this file.
 
 .vault-helper-ignore-list .vault-helper-clear-button:disabled {
 	opacity: 0.7;
+}
+
+.linter-diagnostics-view {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+}
+
+.linter-diagnostics-results {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.linter-diagnostic {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	width: 100%;
+	height: auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-align: left;
 }
